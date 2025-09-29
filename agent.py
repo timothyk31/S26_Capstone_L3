@@ -186,7 +186,7 @@ def main():
 
     input_json = Path(os.getenv("VULN_INPUT", "parsed_vulns.json"))
     output_json = Path(os.getenv("REMEDIATIONS_OUTPUT", "remediations.json"))
-    model_name = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+    model_name = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
     base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     try:
         batch_size = int(os.getenv("BATCH_SIZE", "1"))
@@ -199,6 +199,12 @@ def main():
         min_severity = 4
     lenient = True
 
+    # Optional cap on number of vulnerabilities to process
+    try:
+        max_fixes = int(os.getenv("MAX_FIXES", "0"))
+    except Exception:
+        max_fixes = 0
+
     if not input_json.exists():
         print(f"Input file not found: {input_json}")
         sys.exit(1)
@@ -209,6 +215,8 @@ def main():
         sys.exit(0)
 
     prioritized = sort_and_filter(vulns, min_severity=min_severity)
+    if max_fixes > 0:
+        prioritized = prioritized[:max_fixes]
     if not prioritized:
         print("No vulnerabilities meet the severity threshold.")
         sys.exit(0)
