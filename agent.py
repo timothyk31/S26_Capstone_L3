@@ -7,7 +7,7 @@ from pathlib import Path
 from pydantic import BaseModel, ValidationError
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.ollama import OllamaProvider
+from pydantic_ai.providers.openai import OpenAIProvider
 from dotenv import load_dotenv
 import requests
 
@@ -69,20 +69,21 @@ def batched(items: List[Vulnerability], batch_size: int) -> Iterable[List[Vulner
         yield items[i : i + batch_size]
 
 
-def build_agent(model_name: str, base_url: str) -> Agent:
-    ollama_model = OpenAIChatModel(
+def build_agent(model_name: str, base_url: str, api_key: Optional[str]) -> Agent:
+    openrouter_model = OpenAIChatModel(
         model_name=model_name,
-        provider=OllamaProvider(base_url=base_url),
+        provider=OpenAIProvider(base_url=base_url, api_key=api_key),
     )
     # No output_type, accept free-form text
     agent = Agent(
-        ollama_model,
+        openrouter_model,
         system_prompt=(
             "You are a systems hardening assistant. For each batch of Nessus findings, propose concise remediation commands.\n"
             "- Prefer safe, idempotent commands.\n"
             "- If you know the platform (Linux/Windows), use appropriate tools.\n"
             "- It's OK to reply in plain text or JSON.\n"
             "- Keep it brief."
+            "- Keep the remedations specific to each vulnerability, such as only updating a specific package instead of updating all packages at once."
         ),
     )
     return agent
@@ -110,7 +111,7 @@ def render_batch_prompt(vulns: List[Vulnerability]) -> str:
     return "\n".join(lines)
 
 
-def call_openai_compatible_json(base_url: str, model_name: str, system: str, user: str) -> str:
+def call_openai_compatible_json(base_url: str, model_name: str, system: str, user: str, api_key: Optional[str] = None) -> str:
     url = base_url.rstrip("/") + "/chat/completions"
     payload = {
         "model": model_name,
@@ -121,6 +122,15 @@ def call_openai_compatible_json(base_url: str, model_name: str, system: str, use
         ],
     }
     headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    # Optional OpenRouter headers (improves routing/analytics if provided)
+    site_url = os.getenv("OPENROUTER_SITE_URL")
+    app_name = os.getenv("OPENROUTER_APP_NAME")
+    if site_url:
+        headers["HTTP-Referer"] = site_url
+    if app_name:
+        headers["X-Title"] = app_name
     resp = requests.post(url, headers=headers, data=json.dumps(payload), timeout=120)
     resp.raise_for_status()
     data = resp.json()
@@ -186,8 +196,9 @@ def main():
 
     input_json = Path(os.getenv("VULN_INPUT", "parsed_vulns.json"))
     output_json = Path(os.getenv("REMEDIATIONS_OUTPUT", "remediations.json"))
-    model_name = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
-    base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-20b:free")
+    base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+    api_key = os.getenv("OPENROUTER_API_KEY")
     try:
         batch_size = int(os.getenv("BATCH_SIZE", "1"))
     except Exception:
@@ -221,7 +232,7 @@ def main():
         print("No vulnerabilities meet the severity threshold.")
         sys.exit(0)
 
-    agent = build_agent(model_name=model_name, base_url=base_url)
+    agent = build_agent(model_name=model_name, base_url=base_url, api_key=api_key)
 
     all_suggestions: List[RemediationSuggestion] = []
     total = len(prioritized)
@@ -282,6 +293,7 @@ def main():
                     model_name=model_name,
                     system=system_prompt_for_direct or "",
                     user=prompt,
+                    api_key=api_key,
                 )
                 obj = extract_first_json_object(raw_text)
                 if obj and isinstance(obj, dict) and "suggestions" in obj:

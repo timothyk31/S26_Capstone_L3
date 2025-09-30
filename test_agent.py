@@ -1,8 +1,9 @@
+import os
 from pydantic import BaseModel
 
 from pydantic_ai import Agent
 from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.ollama import OllamaProvider
+from pydantic_ai.providers.openai import OpenAIProvider
 
 
 class CityLocation(BaseModel):
@@ -10,11 +11,14 @@ class CityLocation(BaseModel):
     country: str
 
 
-ollama_model = OpenAIChatModel(
-    model_name='llama3.2:1b',
-    provider=OllamaProvider(base_url='http://localhost:11434/v1'),
+model = OpenAIChatModel(
+    model_name=os.getenv('OPENROUTER_MODEL', 'openai/gpt-oss-20b:free'),
+    provider=OpenAIProvider(
+        base_url=os.getenv('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
+        api_key=os.getenv('OPENROUTER_API_KEY'),
+    ),
 )
-agent = Agent(ollama_model, output_type=CityLocation)
+agent = Agent(model, output_type=CityLocation)
 
 result = agent.run_sync('Where were the olympics held in 2012?')
 print(result.output)

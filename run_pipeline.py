@@ -23,8 +23,8 @@ def run_pipeline(
     # Configure env vars for agent and run it
     os.environ["VULN_INPUT"] = str(parsed_output)
     os.environ["REMEDIATIONS_OUTPUT"] = str(remediations_output)
-    os.environ["OLLAMA_MODEL"] = model_name
-    os.environ["OLLAMA_BASE_URL"] = base_url
+    os.environ["OPENROUTER_MODEL"] = model_name
+    os.environ["OPENROUTER_BASE_URL"] = base_url
     os.environ["BATCH_SIZE"] = str(batch_size)
     os.environ["MIN_SEVERITY"] = str(min_severity)
     if max_fixes > 0:
@@ -56,14 +56,14 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default=os.getenv("OLLAMA_MODEL", "llama3.2:3b"),
-        help="Ollama model name",
+        default=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-20b:free"),
+        help="OpenRouter model name",
     )
     parser.add_argument(
         "--base-url",
         type=str,
-        default=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434/v1"),
-        help="Ollama OpenAI-compatible base URL",
+        default=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        help="OpenRouter OpenAI-compatible base URL",
     )
     parser.add_argument(
         "--batch-size",
