@@ -13,7 +13,7 @@ class CityLocation(BaseModel):
     country: str
 
 model = OpenAIChatModel(
-    model_name=os.getenv('OPENROUTER_MODEL', 'openai/gpt-oss-20b:free'),
+    model_name=os.getenv('OPENROUTER_MODEL'),
     provider=OpenAIProvider(
         base_url=os.getenv('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
         api_key=os.getenv('OPENROUTER_API_KEY'),

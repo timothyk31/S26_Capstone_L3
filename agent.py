@@ -118,9 +118,12 @@ def main():
 
     input_json = Path(os.getenv("VULN_INPUT", "parsed_vulns.json"))
     output_json = Path(os.getenv("REMEDIATIONS_OUTPUT", "remediations.json"))
-    model_name = os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-20b:free")
+    model_name = os.getenv("OPENROUTER_MODEL")
     base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
     api_key = os.getenv("OPENROUTER_API_KEY")
+    if not model_name:
+        print("Error: OPENROUTER_MODEL not set. Please configure it in your environment (e.g., .env).")
+        sys.exit(1)
     try:
         batch_size = int(os.getenv("BATCH_SIZE", "1"))
     except Exception:

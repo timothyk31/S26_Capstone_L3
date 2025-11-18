@@ -1,11 +1,11 @@
 #!/bin/bash
 # Run adaptive agent with password directly (for testing)
 
-SUDO_PASSWORD="shipiA!!12"  # Change this to your actual password
+SUDO_PASSWORD="llmagent"  # Change this to your actual password
 
 python -B qa_agent_adaptive.py \
-  --host 192.168.135.128 \
-  --user skanda \
+  --host 192.168.124.129  \
+  --user llmagent1 \
   --sudo-password "$SUDO_PASSWORD" \
   --inventory inventory.yml \
   --profile xccdf_org.ssgproject.content_profile_cis \
@@ -14,5 +14,5 @@ python -B qa_agent_adaptive.py \
   --max-vulns 5 \
   --min-severity 2 \
   --max-attempts 5 \
-  --key ~/.ssh/mertcis_key
+  --key C:\Users\coope\.ssh\id_ed25519 
 

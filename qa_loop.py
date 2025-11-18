@@ -190,10 +190,12 @@ class QALoop:
         
         # Configure environment for agent
         load_dotenv()
-        self.model_name = os.getenv('OPENROUTER_MODEL', 'openai/gpt-4o-mini')
+        self.model_name = os.getenv('OPENROUTER_MODEL')
         self.base_url = os.getenv('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1')
         self.api_key = os.getenv('OPENROUTER_API_KEY')
         self.batch_size = int(os.getenv('BATCH_SIZE', '1'))
+        if not self.model_name:
+            raise ValueError("OPENROUTER_MODEL not found in environment. Set it in .env or before running QA loop.")
     
     def run_scan(self, iteration: int) -> Path:
         """Run OpenSCAP scan and return path to parsed results"""

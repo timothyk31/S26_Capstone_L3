@@ -56,8 +56,8 @@ def main():
     parser.add_argument(
         "--model",
         type=str,
-        default=os.getenv("OPENROUTER_MODEL", "openai/gpt-oss-20b:free"),
-        help="OpenRouter model name",
+        default=os.getenv("OPENROUTER_MODEL"),
+        help="OpenRouter model name (or set OPENROUTER_MODEL in the environment)",
     )
     parser.add_argument(
         "--base-url",
@@ -86,6 +86,11 @@ def main():
     )
 
     args = parser.parse_args()
+
+    # Ensure a model is available from CLI or environment
+    if not args.model:
+        print("Error: Model not specified. Use --model or set OPENROUTER_MODEL in the environment.")
+        sys.exit(1)
 
     if not args.nessus.exists():
         print(f"Nessus file not found: {args.nessus}")
