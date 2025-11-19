@@ -217,12 +217,18 @@ VULNERABILITY DETAILS:
 
 SYSTEM INFORMATION:
 - OS: Rocky Linux 10 (RHEL-based, uses dnf/yum, systemd)
-- Package Manager: dnf (NOT apt, NOT apt-get). Any sudo/password piping you include WILL BE STRIPPED and replaced by the execution framework.
+- Package Manager: dnf (NOT apt, NOT apt-get).
 - Init System: systemd
 - Configuration: Files typically in /etc/
 
 TASK:
 Based on the rule name "{rule_name}", determine what OpenSCAP is checking and provide the EXACT commands needed to fix it.
+
+IMPORTANT EXECUTION CONTEXT:
+- Your commands will be executed as a SINGLE SHELL SCRIPT running as ROOT.
+- You can use variables, loops, and change directories (cd) - state IS preserved within the script.
+- DO NOT include 'sudo' in your commands - the entire script runs as root.
+- If you need to edit files, use 'sed', 'echo', or 'cat'.
 
 COMMON OPENSCAP RULE PATTERNS AND REMEDIATION:
 
@@ -278,14 +284,6 @@ COMMON OPENSCAP RULE PATTERNS AND REMEDIATION:
    - Enable/Start: systemctl enable firewalld && systemctl start firewalld
    - Configure zones/rules as needed
 
-IMPORTANT EXECUTION CONTEXT:
-- Commands will be executed via SSH: bash -c "your_command"
-- Sudo password will be injected automatically - DO NOT include 'sudo' or 'echo PASSWORD | sudo -S' in your commands.
-- For complex commands (if/then, redirections, pipes), they will be automatically wrapped in 'sudo bash -c ...' so the entire snippet runs as root.
-- For file redirections (>>, >), the command will be wrapped properly
-- For conditionals (if/then/fi), they will be wrapped properly
-- You can write commands as if they were run as root already; the system handles sudo injection and wrapping.
-
 IMPORTANT GUIDELINES:
 - Use DNF, NOT apt or apt-get
 - Be SPECIFIC and COMPLETE - don't just install packages, configure them properly
@@ -294,8 +292,8 @@ IMPORTANT GUIDELINES:
 - For configuration files, use sed or echo with proper escaping
 - Always restart services after configuration changes (unless service refuses restart - use alternatives like augenrules --load for auditd)
 - DO NOT reference 'aide.service' systemd unit (it does not exist)
-- For file redirections: use echo 'text' >> /path/to/file (will be wrapped correctly)
-- For conditionals: use if condition; then action; fi (will be wrapped correctly)
+- For file redirections: use echo 'text' >> /path/to/file
+- For conditionals: use if condition; then action; fi
 - For audit rules: prefer augenrules --load over systemctl restart auditd (auditd may refuse restart)
 
 Provide the EXACT commands that will make this OpenSCAP check pass. Return commands as a list, in the order they should be executed.
@@ -531,14 +529,13 @@ COMMON OPENSCAP ISSUES AND SOLUTIONS:
   * Reboot may be required
 
 IMPORTANT EXECUTION CONTEXT:
-- Commands will be executed via SSH: bash -c "your_command"
-- Sudo password is injected automatically - DO NOT include 'sudo' or 'echo PASSWORD | sudo -S' in your commands.
-- Complex commands (if/then, redirections, pipelines) are automatically wrapped in 'sudo bash -c ...' so the entire snippet runs as root.
-- You can write commands naturally as if they were already running as root; the system handles sudo injection and wrapping.
+- Your commands will be executed as a SINGLE SHELL SCRIPT running as ROOT.
+- You can use variables, loops, and change directories (cd) - state IS preserved within the script.
+- DO NOT include 'sudo' in your commands - the entire script runs as root.
 
 COMMON FAILURE PATTERNS AND SOLUTIONS:
-- "syntax error near unexpected token `then'": Command needs bash -c wrapper (system handles this automatically now)
-- "Permission denied" on redirections: Use bash -c "echo 'text' >> /path" format (system handles this automatically)
+- "syntax error near unexpected token `then'": Check your if/then syntax.
+- "Permission denied" on redirections: The script runs as root, so this shouldn't happen unless the file is immutable (chattr +i).
 - "Operation refused" on service restart: Use alternatives (e.g., augenrules --load for auditd instead of restart)
 - "Operation not permitted" on chown/chmod: May need SELinux context or different approach
 - Commands succeed but OpenSCAP still fails: Check exact requirements (permissions, ownership, configuration values)
@@ -550,7 +547,6 @@ Analyze the error messages, exit codes, and command outputs above. Suggest a DIF
 2. Is MORE SPECIFIC and COMPLETE than the previous attempt
 3. Includes verification commands where appropriate
 4. Handles edge cases that might have caused the failure
-5. Uses proper command format (system will handle sudo and bash -c wrapping automatically)
 """
         
         # Log the prompt for debugging
@@ -584,93 +580,6 @@ Analyze the error messages, exit codes, and command outputs above. Suggest a DIF
         
         return result.output
     
-    def _format_sudo_command(self, command: str) -> str:
-        """Wrap commands with sudo password when needed.
-        
-        We *own* sudo handling:
-        - Strip any LLM-inserted `sudo` or `echo ... | sudo -S` prefixes
-        - For complex shell snippets (if/then, pipes, redirects, etc.), run the
-          *entire* snippet under: echo PW | sudo -S bash -c '<snippet>'
-        - For simple commands, run: echo PW | sudo -S <snippet>
-        """
-        if not self.sudo_password:
-            return command.strip()
-
-        stripped = command.strip()
-
-        # 1) Strip any leading echo/password + sudo pipeline the LLM may have added
-        #    e.g. "echo llmagent | sudo -S dnf install -y aide"
-        lowered = stripped.lower()
-        if "sudo -s" in lowered or "sudo -i" in lowered:
-            # Defensive: avoid interactive shells
-            stripped = stripped.replace("sudo -s", "sudo").replace("sudo -i", "sudo")
-            lowered = stripped.lower()
-
-        # Remove leading "echo something | sudo -S" pattern if present
-        # We do this generically instead of depending on the exact password text.
-        if "| sudo -s" in lowered or "| sudo -s " in lowered:
-            # Rare variant; normalize to -S to make detection consistent
-            stripped = stripped.replace("| sudo -s", "| sudo -S")
-            lowered = stripped.lower()
-
-        # Handle common "echo X | sudo -S" prefix
-        if "echo" in lowered and "| sudo -s" not in lowered and "| sudo -s " not in lowered:
-            parts = stripped.split("|", 1)
-            if len(parts) == 2 and "sudo -s" not in parts[0].lower():
-                left = parts[0].strip()
-                right = parts[1].strip()
-                if left.lower().startswith("echo ") and right.lower().startswith("sudo -s"):
-                    stripped = right[len("sudo -S") :].strip()
-                    lowered = stripped.lower()
-
-        # Even if we didn't match the full pipeline, strip any leading "sudo" word
-        if stripped.lower().startswith("sudo "):
-            stripped = stripped[5:].strip()
-        elif " sudo " in stripped.lower():
-            # Remove only the first occurrence to preserve possible strings/paths
-            idx = stripped.lower().find(" sudo ")
-            stripped = (stripped[:idx] + " " + stripped[idx + len(" sudo ") :]).strip()
-
-        # If the snippet itself already starts with bash -c, don't add another bash -c
-        snippet = stripped
-        starts_with_bash_c = snippet.startswith("bash -c ") or snippet.startswith("bash  -c ")
-
-        # Detect complex commands that should always run under bash -c as a single unit
-        needs_bash_wrapper = any(
-            [
-                # Conditionals
-                (" if " in snippet and " then" in snippet)
-                or ("if [" in snippet and "]" in snippet),
-                # Redirections
-                ">>" in snippet
-                or "<<" in snippet
-                or (snippet.count(">") > 0 and ">>" not in snippet and ">=" not in snippet),
-                # Logical operators (but not comparisons like >=, !=)
-                ("&&" in snippet and ">=" not in snippet)
-                or ("||" in snippet and "!=" not in snippet),
-                # Semicolons with control flow
-                (";" in snippet and ("if" in snippet or "for" in snippet or "while" in snippet)),
-                # Complex quoting
-                snippet.count('"') > 2 or snippet.count("'") > 2,
-                # Pipes (we want the whole pipeline under sudo)
-                "|" in snippet,
-                # Command substitution
-                "$(" in snippet or "`" in snippet,
-            ]
-        )
-
-        pw_quoted = shlex.quote(self.sudo_password)
-
-        # Complex snippet: run everything under sudo bash -c '<snippet>'
-        if needs_bash_wrapper:
-            if starts_with_bash_c:
-                # Already has bash -c; just sudo-wrap it
-                return f"echo {pw_quoted} | sudo -S {snippet}"
-            return f"echo {pw_quoted} | sudo -S bash -c {shlex.quote(snippet)}"
-
-        # Simple command: sudo directly (no extra bash layer needed)
-        return f"echo {pw_quoted} | sudo -S {snippet}"
-
     def _write_commands_file(self, vuln: Vulnerability, attempt_num: int, commands: List[str]) -> Path:
         cmds_path = self.work_dir / f"fix_{vuln.id}_attempt{attempt_num}.cmds.txt"
         lines = []
@@ -681,11 +590,10 @@ Analyze the error messages, exit codes, and command outputs above. Suggest a DIF
         return cmds_path
 
     def _normalize_command(self, command: str) -> str:
-        """Normalize obvious LLM command issues before sudo wrapping.
+        """Normalize obvious LLM command issues.
 
         - Convert Debianisms (apt/apt-get) to dnf on Rocky/RHEL
         - Avoid legacy `service` invocations when a clear systemd unit is present
-        - Keep transformations conservative and log-friendly
         """
         cmd = command.strip()
         lower = cmd.lower()
@@ -737,10 +645,9 @@ Analyze the error messages, exit codes, and command outputs above. Suggest a DIF
         cmds_file = self._write_commands_file(vuln, attempt_num, normalized_cmds)
         console.print(f"\n[blue]Commands file:[/blue] {cmds_file}")
 
-        # Execute commands directly over SSH
-        success, combined_output, detailed_results = self.ssh_executor.execute_commands(
-            [self._format_sudo_command(c) for c in normalized_cmds]
-        )
+        # Execute commands directly over SSH via script
+        # Note: We no longer need _format_sudo_command because the SSHExecutor wraps the whole script in sudo
+        success, combined_output, detailed_results = self.ssh_executor.execute_commands(normalized_cmds)
 
         # Save log
         log_file = self.work_dir / f"fix_{vuln.id}_attempt{attempt_num}.ssh.log"
@@ -1469,7 +1376,7 @@ class SSHExecutor:
         self.port = port
         self.sudo_password = sudo_password
 
-    def _build_base_cmd(self) -> List[str]:
+    def _build_ssh_cmd(self) -> List[str]:
         cmd = ["ssh"]
         if self.key:
             cmd.extend(["-i", self.key])
@@ -1481,75 +1388,123 @@ class SSHExecutor:
         ])
         return cmd
 
+    def _build_scp_cmd(self) -> List[str]:
+        cmd = ["scp"]
+        if self.key:
+            cmd.extend(["-i", self.key])
+        cmd.extend([
+            "-o", "StrictHostKeyChecking=no",
+            "-o", "UserKnownHostsFile=/dev/null",
+            "-P", str(self.port),
+        ])
+        return cmd
+
+    def upload_file(self, local_path: str, remote_path: str) -> bool:
+        """Upload a file to the remote host."""
+        cmd = self._build_scp_cmd() + [local_path, f"{self.user}@{self.host}:{remote_path}"]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, timeout=60)
+            return True
+        except subprocess.CalledProcessError as e:
+            console.print(f"[red]SCP failed: {e.stderr.decode()}[/red]")
+            return False
+        except Exception as e:
+            console.print(f"[red]SCP error: {e}[/red]")
+            return False
+
     def execute_commands(self, commands: List[str]) -> Tuple[bool, str, List[Dict[str, Any]]]:
         """
-        Execute commands remotely over SSH.
+        Execute commands by creating a script, uploading it, and running it.
         
         Returns:
             Tuple of (all_successful, combined_output, detailed_results)
-            detailed_results is a list of dicts with keys: command, exit_code, stdout, stderr, success
         """
-        all_ok = True
-        logs: List[str] = []
-        detailed_results: List[Dict[str, Any]] = []
+        # Create a temporary script file locally
+        timestamp = int(time.time())
+        script_name = f"remediation_{timestamp}.sh"
+        remote_script_path = f"/tmp/{script_name}"
         
-        for idx, command in enumerate(commands, start=1):
-            # Execute command directly - SSH will use the user's default shell
-            # This allows pipes to work correctly (e.g., echo password | sudo -S)
-            # Use bash -c with proper quoting to ensure the command is executed as a single unit
-            # but still allows pipes and redirections to work
-            remote = f"bash -c {shlex.quote(command)}"
-            ssh_cmd = self._build_base_cmd() + [remote]
-            logs.append(f"--- Command {idx}/{len(commands)} ---\n$ {command}\n")
-            
-            result_detail = {
-                'command': command,
-                'command_index': idx,
-                'exit_code': None,
-                'stdout': '',
-                'stderr': '',
-                'success': False,
-                'error_type': None
-            }
-            
-            try:
-                result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=600)
-                result_detail['exit_code'] = result.returncode
-                result_detail['stdout'] = result.stdout or ''
-                result_detail['stderr'] = result.stderr or ''
-                result_detail['success'] = (result.returncode == 0)
-                
-                if result.stdout:
-                    logs.append(f"[stdout]\n{result.stdout}\n")
-                if result.stderr:
-                    logs.append(f"[stderr]\n{result.stderr}\n")
-                if result.returncode != 0:
-                    all_ok = False
-                    logs.append(f"[exit_code={result.returncode}]\n")
-                    result_detail['error_type'] = 'command_failed'
-            except subprocess.TimeoutExpired:
-                all_ok = False
-                error_msg = "[timeout] Command timed out (>600s)\n"
-                logs.append(error_msg)
-                result_detail['error_type'] = 'timeout'
-                result_detail['stderr'] = error_msg
-            except FileNotFoundError:
-                all_ok = False
-                error_msg = "[error] ssh not found on local system\n"
-                logs.append(error_msg)
-                result_detail['error_type'] = 'ssh_not_found'
-                result_detail['stderr'] = error_msg
-            except Exception as e:
-                all_ok = False
-                error_msg = f"[error] {e}\n"
-                logs.append(error_msg)
-                result_detail['error_type'] = 'exception'
-                result_detail['stderr'] = str(e)
-            
-            detailed_results.append(result_detail)
-            logs.append("\n")
+        # Generate script content
+        # We use set -x for verbose output (echoing commands)
+        # We use set -e to stop on error (optional, but good for strictness. 
+        # However, for this agent we might want to continue to see all errors? 
+        # Let's stick to sequential execution without set -e for now to match previous behavior 
+        # where we tried to run everything, but now we have state.)
+        # Actually, let's use a helper function in the script to run commands and capture status.
         
-        return all_ok, "".join(logs), detailed_results
+        script_content = ["#!/bin/bash", "export LANG=C"]
+        
+        # If we have a sudo password, we can use it.
+        # But we are running the *entire script* with sudo.
+        
+        for cmd in commands:
+            script_content.append(f"echo 'Running: {cmd}'")
+            script_content.append(cmd)
+            script_content.append("if [ $? -ne 0 ]; then echo 'COMMAND_FAILED'; fi")
+            script_content.append("echo '---'")
+
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.sh', newline='\n') as tmp:
+            tmp.write("\n".join(script_content))
+            tmp_path = tmp.name
+
+        try:
+            # Upload script
+            if not self.upload_file(tmp_path, remote_script_path):
+                return False, "Failed to upload remediation script", []
+
+            # Execute script
+            # We wrap the execution in sudo if password is provided
+            if self.sudo_password:
+                # echo password | sudo -S bash script
+                # We need to be careful with quoting.
+                # The command to run on remote is: echo 'PASS' | sudo -S bash /tmp/script
+                remote_cmd = f"echo {shlex.quote(self.sudo_password)} | sudo -S bash {remote_script_path}"
+            else:
+                # Just bash script (assuming user is root or doesn't need sudo, which is unlikely for fixes)
+                # But if user is root, sudo -S might complain or just work.
+                # If no sudo password, maybe we just try running it?
+                remote_cmd = f"bash {remote_script_path}"
+
+            ssh_cmd = self._build_ssh_cmd() + [remote_cmd]
+            
+            result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=600)
+            
+            # Cleanup remote script (best effort)
+            cleanup_cmd = self._build_ssh_cmd() + [f"rm -f {remote_script_path}"]
+            subprocess.run(cleanup_cmd, capture_output=True, timeout=10)
+
+            output = result.stdout + result.stderr
+            
+            # Parse output to reconstruct detailed results
+            # This is a bit loose because we are parsing stdout.
+            # But it's better than nothing.
+            detailed_results = []
+            
+            # Simple parsing logic could be improved, but for now let's just return the whole blob
+            # and mark success based on return code of the script.
+            # Since we didn't use set -e, the script return code might be 0 even if commands failed.
+            # We need to check for COMMAND_FAILED in output.
+            
+            success = (result.returncode == 0) and ("COMMAND_FAILED" not in output)
+            
+            # Create a single "detailed result" for the whole script for now, 
+            # or try to split it if we really want to match the old interface.
+            # The old interface expects a list of results.
+            
+            detailed_results.append({
+                'command': 'full_remediation_script',
+                'exit_code': result.returncode,
+                'stdout': result.stdout,
+                'stderr': result.stderr,
+                'success': success
+            })
+
+            return success, output, detailed_results
+
+        finally:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
 
 
 def main():
