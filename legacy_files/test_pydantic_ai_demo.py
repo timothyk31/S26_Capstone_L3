@@ -8,15 +8,17 @@ from pydantic_ai.providers.openai import OpenAIProvider
 
 load_dotenv()
 
+
 class CityLocation(BaseModel):
     city: str
     country: str
 
+
 model = OpenAIChatModel(
-    model_name=os.getenv('OPENROUTER_MODEL'),
+    model_name=os.getenv("OPENROUTER_MODEL"),
     provider=OpenAIProvider(
-        base_url=os.getenv('OPENROUTER_BASE_URL', 'https://openrouter.ai/api/v1'),
-        api_key=os.getenv('OPENROUTER_API_KEY'),
+        base_url=os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
+        api_key=os.getenv("OPENROUTER_API_KEY"),
     ),
 )
 
@@ -24,7 +26,7 @@ model = OpenAIChatModel(
 agent = Agent(
     model,
     output_type=NativeOutput(CityLocation, strict=True),
-    system_prompt="You are a helpful assistant that provides location information."
+    system_prompt="You are a helpful assistant that provides location information.",
 )
 
 prompt = "Where were the Olympics held in 2012?"
@@ -36,3 +38,5 @@ location: CityLocation = result.output
 print(location)
 
 print(result.usage())
+
+

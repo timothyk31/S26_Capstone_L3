@@ -3,8 +3,8 @@ import sys
 import argparse
 from pathlib import Path
 
-from parse_nessus import parse_nessus
-import agent as agent_module
+from legacy_files.parse_nessus import parse_nessus
+from legacy_files import agent as agent_module
 
 
 def run_pipeline(

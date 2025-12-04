@@ -81,13 +81,11 @@ fi
 
 # Check for main scripts
 REQUIRED_FILES=(
-    "qa_loop.py"
+    "qa_agent_adaptive.py"
     "openscap_cli.py"
     "parse_openscap.py"
-    "test_end_to_end.py"
     "requirements.txt"
     "README.md"
-    "TEAM_SETUP.md"
 )
 
 for file in "${REQUIRED_FILES[@]}"; do

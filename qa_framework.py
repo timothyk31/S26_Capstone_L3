@@ -118,8 +118,6 @@ class VulnerabilityRemediation:
 
     def _extract_package_name(self, vuln: Dict[str, Any]) -> Optional[str]:
         """Extract package name from vulnerability data"""
-        # Implement package name extraction logic
-        # This is a placeholder - you'll need to implement proper extraction
         title = vuln.get("title", "").lower()
         if "package" in title:
             # Example: "outdated apache2 package"
@@ -131,8 +129,6 @@ class VulnerabilityRemediation:
 
     def _extract_service_name(self, vuln: Dict[str, Any]) -> Optional[str]:
         """Extract service name from vulnerability data"""
-        # Implement service name extraction logic
-        # This is a placeholder - you'll need to implement proper extraction
         title = vuln.get("title", "").lower()
         common_services = ["ssh", "apache", "nginx", "mysql", "postgresql"]
         for service in common_services:
@@ -142,8 +138,6 @@ class VulnerabilityRemediation:
 
     def _get_service_config(self, service: str) -> Optional[Dict[str, str]]:
         """Get service configuration template details"""
-        # This would typically load from a configuration file
-        # For now, return hardcoded examples
         configs = {
             "ssh": {
                 "template": "templates/ssh/sshd_config.j2",

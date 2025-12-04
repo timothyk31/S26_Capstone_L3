@@ -2,6 +2,7 @@ import xml.etree.ElementTree as ET
 import json
 from pathlib import Path
 
+
 def parse_nessus(file_path: str, output_json: str = "parsed_vulns.json"):
     tree = ET.parse(file_path)
     root = tree.getroot()
@@ -27,6 +28,9 @@ def parse_nessus(file_path: str, output_json: str = "parsed_vulns.json"):
     Path(output_json).write_text(json.dumps(findings, indent=2))
     print(f"Parsed {len(findings)} findings : {output_json}")
 
+
 if __name__ == "__main__":
     # Example usage
     parse_nessus("scan_results.nessus")
+
+

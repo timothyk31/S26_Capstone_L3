@@ -22,8 +22,6 @@ SEVERITY_ORDER = {
 }
 
 
-
-
 def load_vulnerabilities(path: Path) -> List[Vulnerability]:
     data = json.loads(path.read_text())
     vulns: List[Vulnerability] = []
@@ -111,8 +109,6 @@ def render_batch_prompt(vulns: List[Vulnerability]) -> str:
     return "\n".join(lines)
 
 
-
-
 def main():
     load_dotenv()
 
@@ -168,11 +164,11 @@ def main():
         prompt = render_batch_prompt(chunk)
         try:
             result = agent.run_sync(prompt)
-            # With structured output, result.output is already a BatchResult instance
+            
             batch_result: BatchResult = result.output
             all_suggestions.extend(batch_result.suggestions)
             processed += len(chunk)
-            
+
             if hasattr(result, "usage"):
                 try:
                     usage = result.usage()
@@ -183,16 +179,16 @@ def main():
                     print(f"Processed {processed}/{total}")
             else:
                 print(f"Processed {processed}/{total}")
-                
+
         except Exception as e:
             print(f"Error running agent on batch starting with id {chunk[0].id}: {e}")
             # Fallback: create basic suggestions for failed batch
             for v in chunk:
                 all_suggestions.append(
                     RemediationSuggestion(
-                        id=v.id, 
-                        proposed_commands=[f"# Manual review required for {v.title}"], 
-                        notes=f"Failed to generate remediation: {str(e)}"
+                        id=v.id,
+                        proposed_commands=[f"# Manual review required for {v.title}"],
+                        notes=f"Failed to generate remediation: {str(e)}",
                     )
                 )
             processed += len(chunk)
@@ -211,3 +207,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
