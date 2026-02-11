@@ -38,3 +38,105 @@ class ToolVerdict(BaseModel):
 
 class BatchResult(BaseModel):
     suggestions: List[RemediationSuggestion] = Field(description="List of remediation suggestions for the vulnerabilities")
+
+
+# ============================================================================
+# TODO: Multi-Agent Pipeline Schemas
+# ============================================================================
+
+# TODO: Triage Agent Schemas
+# class TriageInput(BaseModel):
+#     vulnerability: Vulnerability
+#     system_context: Optional[Dict[str, Any]] = None
+#
+# class TriageDecision(BaseModel):
+#     finding_id: str
+#     should_remediate: bool
+#     risk_level: str  # "low" | "medium" | "high" | "critical"
+#     reason: str
+#     requires_human_review: bool = False
+#     estimated_impact: Optional[str] = None
+
+# TODO: Remedy Agent Schemas
+# class RemedyInput(BaseModel):
+#     vulnerability: Vulnerability
+#     triage_decision: TriageDecision
+#     attempt_number: int = 1
+#     previous_attempts: List['RemediationAttempt'] = []
+#     review_feedback: Optional[str] = None
+#
+# class RemediationAttempt(BaseModel):
+#     finding_id: str
+#     attempt_number: int
+#     commands_executed: List[str]
+#     files_modified: List[str]
+#     files_read: List[str]
+#     execution_details: List[RunCommandResult]  # Reuse existing!
+#     scan_passed: bool
+#     scan_output: Optional[str] = None
+#     duration: float
+#     success: bool
+#     error_summary: Optional[str] = None
+#     llm_verdict: Optional[ToolVerdict] = None  # Reuse existing!
+
+# TODO: Review Agent Schemas
+# class ReviewInput(BaseModel):
+#     vulnerability: Vulnerability
+#     remediation_attempt: RemediationAttempt
+#     triage_decision: TriageDecision
+#
+# class ReviewVerdict(BaseModel):
+#     finding_id: str
+#     is_optimal: bool
+#     approve: bool
+#     feedback: Optional[str] = None
+#     concerns: List[str] = []
+#     suggested_improvements: List[str] = []
+#     security_score: Optional[int] = None
+#     best_practices_followed: bool = True
+
+# TODO: QA Agent Schemas
+# class QAInput(BaseModel):
+#     vulnerability: Vulnerability
+#     remediation_attempt: RemediationAttempt
+#     review_verdict: ReviewVerdict
+#
+# class QAResult(BaseModel):
+#     finding_id: str
+#     safe: bool
+#     side_effects: List[str] = []
+#     services_affected: List[str] = []
+#     system_checks: List[RunCommandResult] = []  # Reuse existing!
+#     regression_detected: bool = False
+#     other_findings_affected: List[str] = []
+#     recommendation: str  # "Approve", "Rollback", "Investigate"
+#     validation_duration: float
+
+# TODO: Aggregation Schemas
+# class FindingResult(BaseModel):
+#     """Complete pipeline result for a single finding"""
+#     vulnerability: Vulnerability
+#     triage: TriageDecision
+#     remediation: Optional[RemediationAttempt] = None
+#     review: Optional[ReviewVerdict] = None
+#     qa: Optional[QAResult] = None
+#     final_status: str  # "success" | "failed" | "discarded" | "requires_human_review"
+#     total_duration: float
+#     timestamp: str
+#
+# class AggregatedReport(BaseModel):
+#     """Final output from entire workflow"""
+#     findings_processed: int
+#     findings_remediated: int
+#     findings_failed: int
+#     findings_discarded: int
+#     results: List[FindingResult]
+#     success_rate: float
+#     total_duration: float
+#     stage_statistics: Dict[str, Any]
+#     ansible_playbook_path: Optional[str] = None
+#     text_report_path: Optional[str] = None
+#     pdf_report_path: Optional[str] = None
+#     scan_profile: str
+#     target_host: str
+#     timestamp: str
