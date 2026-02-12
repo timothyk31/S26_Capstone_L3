@@ -41,35 +41,21 @@ class BatchResult(BaseModel):
 
 
 # ============================================================================
-# Multi-Agent Pipeline Schemas
+# TODO: Multi-Agent Pipeline Schemas
 # ============================================================================
 
-# --- Triage Agent Schemas ---
-
-class TriageInput(BaseModel):
-    vulnerability: Vulnerability
-    system_context: Optional[dict] = Field(
-        default=None,
-        description="Optional context about the target system (e.g., environment, criticality)",
-    )
-
-
-class TriageDecision(BaseModel):
-    finding_id: str = Field(..., description="Vulnerability id from the scan (e.g., openscap_002)")
-    should_remediate: bool = Field(..., description="True if safe for automated remediation")
-    risk_level: str = Field(
-        ...,
-        description="Risk assessment: low | medium | high | critical",
-    )
-    reason: str = Field(..., description="Rationale for the triage decision")
-    requires_human_review: bool = Field(
-        default=False,
-        description="True if a human should review before any action",
-    )
-    estimated_impact: Optional[str] = Field(
-        default=None,
-        description="Expected impact of remediation (e.g., 'service restart', 'reboot required')",
-    )
+# TODO: Triage Agent Schemas
+# class TriageInput(BaseModel):
+#     vulnerability: Vulnerability
+#     system_context: Optional[Dict[str, Any]] = None
+#
+# class TriageDecision(BaseModel):
+#     finding_id: str
+#     should_remediate: bool
+#     risk_level: str  # "low" | "medium" | "high" | "critical"
+#     reason: str
+#     requires_human_review: bool = False
+#     estimated_impact: Optional[str] = None
 
 # TODO: Remedy Agent Schemas
 # class RemedyInput(BaseModel):
