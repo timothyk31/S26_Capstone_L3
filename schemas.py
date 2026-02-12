@@ -87,22 +87,23 @@ class ReviewVerdict(BaseModel):
     security_score: Optional[int] = None  # 1-10
     best_practices_followed: bool = True
 
-# TODO: QA Agent Schemas
-# class QAInput(BaseModel):
-#     vulnerability: Vulnerability
-#     remediation_attempt: RemediationAttempt
-#     review_verdict: ReviewVerdict
-#
-# class QAResult(BaseModel):
-#     finding_id: str
-#     safe: bool
-#     side_effects: List[str] = []
-#     services_affected: List[str] = []
-#     system_checks: List[RunCommandResult] = []  # Reuse existing!
-#     regression_detected: bool = False
-#     other_findings_affected: List[str] = []
-#     recommendation: str  # "Approve", "Rollback", "Investigate"
-#     validation_duration: float
+# QA Agent Schemas
+class QAInput(BaseModel):
+    vulnerability: Vulnerability
+    remediation_attempt: RemediationAttempt
+    review_verdict: ReviewVerdict
+
+
+class QAResult(BaseModel):
+    finding_id: str
+    safe: bool
+    side_effects: List[str] = Field(default_factory=list)
+    services_affected: List[str] = Field(default_factory=list)
+    system_checks: List[RunCommandResult] = Field(default_factory=list)  # Reuse existing!
+    regression_detected: bool = False
+    other_findings_affected: List[str] = Field(default_factory=list)
+    recommendation: str = "Investigate"  # "Approve", "Rollback", "Investigate"
+    validation_duration: float = 0.0
 
 # TODO: Aggregation Schemas
 # class FindingResult(BaseModel):
