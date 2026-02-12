@@ -324,11 +324,21 @@ class RemedyAgent:
 
             for tc in tool_calls:
                 name = tc["function"]["name"]
-                raw_args = tc["function"].get("arguments") or "{}"
-                try:
-                    args = json.loads(raw_args)
-                except Exception:
+                raw_args = tc["function"].get("arguments")
+
+                # Normalize tool arguments (models may return str, dict, or list)
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = {}
+                elif isinstance(raw_args, dict):
+                    args = raw_args
+                elif isinstance(raw_args, list):
+                    args = raw_args[0] if raw_args and isinstance(raw_args[0], dict) else {}
+                else:
                     args = {}
+
 
                 if name == "run_cmd":
                     command = (args.get("command") or "").strip()
