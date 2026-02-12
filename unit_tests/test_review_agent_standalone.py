@@ -8,7 +8,8 @@ import os
 import sys
 
 # Ensure project root is on path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
 
 from dotenv import load_dotenv
 
