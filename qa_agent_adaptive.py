@@ -625,6 +625,17 @@ class AdaptiveQAAgent:
         filtered = [v for v in vulns if int(v.severity) >= min_severity]
         console.print(f"\n[yellow]Found {len(filtered)} vulnerabilities (severity >= {min_severity})[/yellow]")
         
+        # Save all vulnerabilities to PDF
+        try:
+            pdf_path = self._write_vulnerabilities_pdf(vulns)
+            console.print(f"\n[green]✓ Vulnerabilities saved to PDF: {pdf_path}[/green]")
+        except Exception as e:
+            console.print(f"\n[yellow]⚠ Warning: Failed to save vulnerabilities to PDF: {e}[/yellow]")
+        
+        # Exit after scan (remove these lines to continue with remediation)
+        console.print("\n[green]Scan complete. Exiting.[/green]")
+        return
+        
         # Randomize order if requested
         if randomize:
             random.shuffle(filtered)
@@ -947,6 +958,99 @@ class AdaptiveQAAgent:
 
         # Write the file
         report_path.write_text("".join(lines), encoding='utf-8')
+
+    def _write_vulnerabilities_pdf(self, vulns: List[Vulnerability]):
+        """Generate a PDF listing all discovered vulnerabilities."""
+        try:
+            from reportlab.lib.pagesizes import letter
+            from reportlab.pdfgen import canvas
+            from reportlab.lib.utils import simpleSplit
+        except Exception as e:
+            raise RuntimeError("reportlab is not installed. Install with 'pip install reportlab' or 'pip install -r requirements.txt'") from e
+
+        pdf_path = self.work_dir / "vulnerabilities_scan.pdf"
+        c = canvas.Canvas(str(pdf_path), pagesize=letter)
+        width, height = letter
+
+        def draw_wrapped(text: str, x: int, y: int, max_width: int, line_height: int = 12):
+            lines = simpleSplit(text or "", "Helvetica", 9, max_width)
+            cur_y = y
+            for line in lines:
+                if cur_y < 50:
+                    c.showPage()
+                    c.setFont("Helvetica", 9)
+                    cur_y = height - 50
+                c.drawString(x, cur_y, line)
+                cur_y -= line_height
+            return cur_y
+
+        # Title page
+        c.setTitle("Vulnerability Scan Report")
+        c.setFont("Helvetica-Bold", 18)
+        c.drawString(50, height - 60, "Vulnerability Scan Report")
+        c.setFont("Helvetica", 12)
+        c.drawString(50, height - 85, f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        c.drawString(50, height - 105, f"Target Host: {self.scanner.target_host}")
+        c.drawString(50, height - 125, f"Total Vulnerabilities: {len(vulns)}")
+        c.drawString(50, height - 145, f"Profile: {self.scan_profile.split('_')[-1].upper()}")
+        c.showPage()
+
+        # Vulnerability details
+        for idx, vuln in enumerate(vulns, 1):
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(50, height - 50, f"Vulnerability {idx} of {len(vulns)}")
+            
+            y = height - 75
+            c.setFont("Helvetica-Bold", 11)
+            c.drawString(50, y, f"ID: {vuln.id}")
+            y -= 18
+            
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(50, y, "Title:")
+            y -= 14
+            c.setFont("Helvetica", 9)
+            y = draw_wrapped(vuln.title, 60, y, width - 110)
+            y -= 10
+            
+            c.setFont("Helvetica-Bold", 10)
+            severity_map = {"0": "Info", "1": "Low", "2": "Medium", "3": "High", "4": "Critical"}
+            severity_text = severity_map.get(str(vuln.severity), str(vuln.severity))
+            c.drawString(50, y, f"Severity: {severity_text} ({vuln.severity})")
+            y -= 18
+            
+            c.drawString(50, y, f"Host: {vuln.host}")
+            y -= 18
+            
+            # Description if available
+            description = getattr(vuln, 'description', None)
+            if description:
+                c.setFont("Helvetica-Bold", 10)
+                c.drawString(50, y, "Description:")
+                y -= 14
+                c.setFont("Helvetica", 9)
+                y = draw_wrapped(str(description)[:800], 60, y, width - 110)
+                y -= 10
+            
+            # Recommendation if available
+            recommendation = getattr(vuln, 'recommendation', None)
+            if recommendation:
+                c.setFont("Helvetica-Bold", 10)
+                c.drawString(50, y, "Recommendation:")
+                y -= 14
+                c.setFont("Helvetica", 9)
+                y = draw_wrapped(str(recommendation)[:800], 60, y, width - 110)
+                y -= 10
+            
+            # Draw separator line
+            if idx < len(vulns):
+                c.line(50, y - 10, width - 50, y - 10)
+            
+            # New page if not enough space or last vulnerability
+            if idx < len(vulns):
+                c.showPage()
+
+        c.save()
+        return pdf_path
 
     def _write_pdf_report(self, all_results: List[Dict]):
         """Generate a PDF report summarizing attempts, playbooks, and outputs."""
