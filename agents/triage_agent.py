@@ -477,6 +477,9 @@ class TriageAgent(BaseAgent):
         output_path: str | Path = "triage_results.json",
         *,
         target_host: str = "unknown",
+        total_rules_scanned: int = 0,
+        rules_passed: int = 0,
+        rules_failed: int = 0,
     ) -> Path:
         """
         Write a machine-readable JSON report of triage decisions.
@@ -497,6 +500,11 @@ class TriageAgent(BaseAgent):
         report = {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "target_host": target_host,
+            "scan_statistics": {
+                "total_rules_scanned": total_rules_scanned,
+                "rules_passed": rules_passed,
+                "rules_failed": rules_failed,
+            },
             "total_triaged": len(decisions),
             "counts": counts,
             "decisions": [d.model_dump() for d in decisions],
@@ -516,6 +524,9 @@ class TriageAgent(BaseAgent):
         *,
         target_host: str = "unknown",
         title: str = "OpenSCAP Triage Report",
+        total_rules_scanned: int = 0,
+        rules_passed: int = 0,
+        rules_failed: int = 0,
     ) -> Path:
         """
         Generate a neatly formatted PDF report of triage decisions.
@@ -593,7 +604,25 @@ class TriageAgent(BaseAgent):
         review = sum(1 for d in decisions if d.requires_human_review)
         blocked = len(decisions) - safe - review
 
-        elements.append(Paragraph("Summary", section_style))
+        elements.append(Paragraph("Scan Statistics", section_style))
+        scan_data = [
+            ["Total Rules Scanned", str(total_rules_scanned)],
+            ["Rules Passed", str(rules_passed)],
+            ["Rules Failed / Errors", str(rules_failed)],
+        ]
+        scan_table = Table(scan_data, colWidths=[3 * inch, 1.5 * inch])
+        scan_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e8f5e9")),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+        ]))
+        elements.append(scan_table)
+        elements.append(Spacer(1, 14))
+
+        elements.append(Paragraph("Triage Summary", section_style))
         summary_data = [
             ["Total Findings Triaged", str(len(decisions))],
             ["Safe to Remediate", str(safe)],

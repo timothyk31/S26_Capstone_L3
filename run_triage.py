@@ -34,6 +34,7 @@ import os
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -140,20 +141,41 @@ def run_scan(
 
 # ── Parsing ────────────────────────────────────────────────────────────────
 
+# Container for parsed scan data
+@dataclass
+class ScanData:
+    vulns: List[Vulnerability]
+    total_rules_scanned: int
+    rules_passed: int
+    rules_failed: int
+
+
 def load_vulnerabilities(
     xml_path: str, parsed_json_path: str
-) -> List[Vulnerability]:
-    """Parse the XML into JSON, then load as Vulnerability models."""
-    parse_openscap(xml_path, parsed_json_path)
+) -> ScanData:
+    """Parse the XML into JSON, then load as Vulnerability models with scan stats."""
+    result = parse_openscap(xml_path, parsed_json_path)
+
+    # Handle both old (list) and new (dict) return format
+    if isinstance(result, dict):
+        raw = result["findings"]
+        total_scanned = result["total_rules_scanned"]
+        passed = result["rules_passed"]
+        failed = result["rules_failed"]
+    else:
+        raw = result
+        total_scanned = len(raw)
+        passed = 0
+        failed = len(raw)
 
     try:
-        raw = json.loads(Path(parsed_json_path).read_text(encoding="utf-8"))
+        raw_json = json.loads(Path(parsed_json_path).read_text(encoding="utf-8"))
     except Exception as exc:
         console.print(f"[red]Failed to read parsed JSON: {exc}[/red]")
-        return []
+        return ScanData([], 0, 0, 0)
 
     vulns: List[Vulnerability] = []
-    for entry in raw:
+    for entry in raw_json:
         try:
             vulns.append(
                 Vulnerability(
@@ -167,7 +189,7 @@ def load_vulnerabilities(
             )
         except (ValidationError, KeyError) as exc:
             console.print(f"[yellow]Skipping malformed finding: {exc}[/yellow]")
-    return vulns
+    return ScanData(vulns, total_scanned, passed, failed)
 
 
 # ── Concurrent triage ──────────────────────────────────────────────────────
@@ -427,6 +449,11 @@ def main() -> int:
     # ── Parse ─────────────────────────────────────────────────────────
     parsed_json = args.parsed_json
 
+    # Track scan statistics
+    total_rules_scanned = 0
+    rules_passed = 0
+    rules_failed = 0
+
     if args.skip_scan and Path(parsed_json).exists():
         console.print(f"[cyan]Using existing parsed JSON: {parsed_json}[/cyan]")
         raw = json.loads(Path(parsed_json).read_text(encoding="utf-8"))
@@ -445,20 +472,31 @@ def main() -> int:
                 )
             except (ValidationError, KeyError):
                 continue
+        rules_failed = len(vulns)
     elif args.skip_scan and Path(args.local_xml).exists():
         console.print(f"[cyan]Parsing existing XML: {args.local_xml}[/cyan]")
-        vulns = load_vulnerabilities(args.local_xml, parsed_json)
+        scan_data = load_vulnerabilities(args.local_xml, parsed_json)
+        vulns = scan_data.vulns
+        total_rules_scanned = scan_data.total_rules_scanned
+        rules_passed = scan_data.rules_passed
+        rules_failed = scan_data.rules_failed
     elif args.skip_scan:
         console.print("[red]--skip-scan set but neither parsed JSON nor local XML found.[/red]")
         return 1
     else:
-        vulns = load_vulnerabilities(args.local_xml, parsed_json)
+        scan_data = load_vulnerabilities(args.local_xml, parsed_json)
+        vulns = scan_data.vulns
+        total_rules_scanned = scan_data.total_rules_scanned
+        rules_passed = scan_data.rules_passed
+        rules_failed = scan_data.rules_failed
 
     if not vulns:
         console.print("[yellow]No findings to triage.[/yellow]")
         return 0
 
     console.print(f"[green]Loaded {len(vulns)} findings from scan.[/green]")
+    if total_rules_scanned:
+        console.print(f"[cyan]Scan stats: {total_rules_scanned} rules scanned, {rules_passed} passed, {rules_failed} failed[/cyan]")
 
     # ── Triage ────────────────────────────────────────────────────────
     decisions = triage_concurrent(
@@ -480,13 +518,19 @@ def main() -> int:
     writer = _make_agent(args.mode, args.model, args.fallbacks)
 
     json_path = writer.write_results_json(
-        decisions, args.triage_json, target_host=host or "unknown"
+        decisions, args.triage_json, target_host=host or "unknown",
+        total_rules_scanned=total_rules_scanned,
+        rules_passed=rules_passed,
+        rules_failed=rules_failed,
     )
     console.print(f"[green]✓ JSON saved: {json_path}[/green]")
 
     if not args.no_pdf:
         pdf_path = writer.write_results_pdf(
-            decisions, args.triage_pdf, target_host=host or "unknown"
+            decisions, args.triage_pdf, target_host=host or "unknown",
+            total_rules_scanned=total_rules_scanned,
+            rules_passed=rules_passed,
+            rules_failed=rules_failed,
         )
         console.print(f"[green]✓ PDF  saved: {pdf_path}[/green]")
 

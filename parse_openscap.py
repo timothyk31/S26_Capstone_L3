@@ -178,7 +178,13 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
     print(f"Parsed {len(findings)} failed/error findings → {output_json}")
     print(f"Total rules checked: {len(rule_results)}")
     
-    return findings
+    # Return findings along with scan statistics
+    return {
+        "findings": findings,
+        "total_rules_scanned": len(rule_results),
+        "rules_passed": len(rule_results) - len(findings),
+        "rules_failed": len(findings),
+    }
 
 
 def main():
