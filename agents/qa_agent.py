@@ -1,7 +1,7 @@
 """
 QA Agent: System-wide validation after remediation.
 Position: FOURTH stage in pipeline (after Review approval).
-Tools: run_cmd, scan (2 tools for validation checks).
+Tools: run_cmd (1 tool for validation checks).
 """
 
 import os
@@ -10,7 +10,6 @@ from typing import Any, Dict, List, Optional
 
 from helpers.command_executor import ShellCommandExecutor
 from helpers.llm_base import ToolCallingLLM
-from helpers.scanner import Scanner
 from helpers.utils import annotate_error_categories, normalize_command
 from schemas import QAInput, QAResult, RunCommandResult
 
@@ -18,20 +17,18 @@ from schemas import QAInput, QAResult, RunCommandResult
 class QAAgent:
     """
     QA Agent validates that remediation didn't break the system.
-    Uses LLM with run_cmd and scan tools for comprehensive validation.
+    Uses LLM with run_cmd tool for comprehensive validation.
     """
 
     SYSTEM_PROMPT = (
         "You are a QA validation agent for Linux security remediation. "
         "Your role is to verify that a remediation did NOT introduce harm to the system.\n\n"
-        "You have access to 2 tools:\n"
-        "1. `run_cmd`: Run system health checks (systemctl status, service checks, log analysis)\n"
-        "2. `scan`: Re-run security scan to check for regressions\n\n"
+        "You have access to 1 tool:\n"
+        "1. `run_cmd`: Run system health checks (systemctl status, service checks, log analysis)\n\n"
         "Your validation checklist:\n"
         "- Verify critical services are still running (sshd, auditd, firewalld, etc.)\n"
         "- Check for errors in system logs (/var/log/messages, journalctl)\n"
         "- Confirm system is still accessible (SSH works)\n"
-        "- Run security scan to ensure no new failures\n"
         "- Detect any side effects or unintended changes\n\n"
         "When done, call `verdict` with:\n"
         "- safe=true if system is healthy\n"
@@ -42,7 +39,6 @@ class QAAgent:
     def __init__(
         self,
         executor: ShellCommandExecutor,
-        scanner: Scanner,
         *,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
@@ -55,7 +51,6 @@ class QAAgent:
 
         Args:
             executor: ShellCommandExecutor for running system checks
-            scanner: Scanner for vulnerability scanning
             api_key: LLM API key (defaults to OPENROUTER_API_KEY env)
             base_url: LLM API base URL (defaults to OPENROUTER_BASE_URL env)
             model: LLM model name (defaults to OPENROUTER_MODEL env)
@@ -63,7 +58,6 @@ class QAAgent:
             request_timeout: HTTP timeout
         """
         self.executor = executor
-        self.scanner = scanner
 
         # Get LLM config from env if not provided
         self.api_key = api_key or os.getenv("OPENROUTER_API_KEY")
@@ -85,7 +79,7 @@ class QAAgent:
         )
 
     def _define_tools(self) -> List[dict]:
-        """Define QA Agent's 2 tools: run_cmd and scan."""
+        """Define QA Agent's tools: run_cmd and verdict."""
         return [
             {
                 "type": "function",
@@ -111,27 +105,6 @@ class QAAgent:
             {
                 "type": "function",
                 "function": {
-                    "name": "scan",
-                    "description": (
-                        "Re-run security scan to check if the specific vulnerability is fixed "
-                        "and verify no new failures were introduced (regression detection)."
-                    ),
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "vulnerability_id": {
-                                "type": "string",
-                                "description": "ID of vulnerability to check",
-                            }
-                        },
-                        "required": ["vulnerability_id"],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            {
-                "type": "function",
-                "function": {
                     "name": "verdict",
                     "description": "Signal QA validation is complete with safety verdict.",
                     "parameters": {
@@ -148,7 +121,7 @@ class QAAgent:
         ]
 
     def _execute_tool(self, tool_name: str, args: dict) -> dict:
-        """Execute QA tools: run_cmd, scan, or verdict."""
+        """Execute QA tools: run_cmd or verdict."""
         if tool_name == "run_cmd":
             command = args.get("command", "").strip()
             if not command:
@@ -166,30 +139,6 @@ class QAAgent:
                 payload["normalized_from"] = command
 
             return payload
-
-        elif tool_name == "scan":
-            vuln_id = args.get("vulnerability_id", "")
-            if hasattr(self, "_current_vulnerability"):
-                is_fixed, scan_output = self.scanner.scan_for_vulnerability(
-                    self._current_vulnerability
-                )
-                return {
-                    "command": f"scan({vuln_id})",
-                    "success": True,
-                    "is_fixed": is_fixed,
-                    "stdout": scan_output or "",
-                    "stderr": "",
-                    "exit_code": 0,
-                    "duration": 0.1,
-                }
-            return {
-                "command": f"scan({vuln_id})",
-                "success": False,
-                "stdout": "",
-                "stderr": "No vulnerability context available for scanning",
-                "exit_code": 1,
-                "duration": 0.0,
-            }
 
         elif tool_name == "verdict":
             # Verdict is handled by ToolCallingLLM, just acknowledge
@@ -209,9 +158,6 @@ class QAAgent:
             QAResult with safety verdict and validation details
         """
         start_time = time.time()
-
-        # Store vulnerability so scan tool can access it
-        self._current_vulnerability = input_data.vulnerability
 
         # Build validation prompt
         user_prompt = self._build_qa_prompt(input_data)
@@ -245,9 +191,6 @@ class QAAgent:
                     timed_out=detail.get("timed_out", False),
                 )
             )
-            # Check scan results for regression (is_fixed=False means vulnerability still present)
-            if detail.get("command", "").startswith("scan(") and detail.get("is_fixed") is False:
-                regression_detected = True
 
         # Determine recommendation
         if safe:
@@ -310,7 +253,6 @@ class QAAgent:
                 "1. Check critical services (sshd, auditd, firewalld) are running",
                 "2. Review system logs for errors introduced since remediation",
                 "3. Confirm system accessibility (SSH still works)",
-                "4. Run scan to verify fix and check for regressions",
                 "",
                 "When validation is complete, call `verdict` with your safety assessment.",
             ]

@@ -17,7 +17,6 @@ sys.path.insert(0, project_root)
 
 from agents.qa_agent import QAAgent
 from helpers.command_executor import ShellCommandExecutor
-from helpers.scanner import Scanner
 from schemas import (
     QAInput,
     QAResult,
@@ -56,19 +55,6 @@ def mock_executor():
 
     executor.run_command = Mock(side_effect=mock_run_command)
     return executor
-
-
-@pytest.fixture
-def mock_scanner():
-    """Mock Scanner."""
-    scanner = Mock(spec=Scanner)
-
-    # Mock successful scan
-    def mock_scan_for_vulnerability(vuln):
-        return (True, f"Vulnerability {vuln.id} is fixed")
-
-    scanner.scan_for_vulnerability = Mock(side_effect=mock_scan_for_vulnerability)
-    return scanner
 
 
 @pytest.fixture
@@ -162,7 +148,7 @@ def sample_qa_input(sample_vulnerability, sample_remediation_attempt, sample_rev
 class TestQAAgentInitialization:
     """Test QA Agent initialization."""
 
-    def test_init_with_env_vars(self, mock_executor, mock_scanner):
+    def test_init_with_env_vars(self, mock_executor):
         """Test initialization with environment variables."""
         with patch.dict(
             os.environ,
@@ -172,19 +158,17 @@ class TestQAAgentInitialization:
                 "OPENROUTER_MODEL": "test-model",
             },
         ):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
+            agent = QAAgent(executor=mock_executor)
 
             assert agent.api_key == "test-key"
             assert agent.base_url == "https://test.api.com"
             assert agent.model == "test-model"
             assert agent.executor == mock_executor
-            assert agent.scanner == mock_scanner
 
-    def test_init_with_parameters(self, mock_executor, mock_scanner):
+    def test_init_with_parameters(self, mock_executor):
         """Test initialization with explicit parameters."""
         agent = QAAgent(
             executor=mock_executor,
-            scanner=mock_scanner,
             api_key="param-key",
             base_url="https://param.api.com",
             model="param-model",
@@ -194,33 +178,32 @@ class TestQAAgentInitialization:
         assert agent.base_url == "https://param.api.com"
         assert agent.model == "param-model"
 
-    def test_init_missing_api_key(self, mock_executor, mock_scanner):
+    def test_init_missing_api_key(self, mock_executor):
         """Test initialization fails without API key."""
         with patch.dict(os.environ, {}, clear=True):
             with pytest.raises(ValueError, match="OPENROUTER_API_KEY not found"):
-                QAAgent(executor=mock_executor, scanner=mock_scanner)
+                QAAgent(executor=mock_executor)
 
 
 class TestQAAgentTools:
     """Test QA Agent tool definitions."""
 
-    def test_define_tools(self, mock_executor, mock_scanner):
-        """Test that QA agent defines exactly 3 tools: run_cmd, scan, verdict."""
+    def test_define_tools(self, mock_executor):
+        """Test that QA agent defines exactly 2 tools: run_cmd, verdict."""
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
+            agent = QAAgent(executor=mock_executor)
             tools = agent._define_tools()
 
-            assert len(tools) == 3
+            assert len(tools) == 2
 
             tool_names = [tool["function"]["name"] for tool in tools]
             assert "run_cmd" in tool_names
-            assert "scan" in tool_names
             assert "verdict" in tool_names
 
-    def test_execute_tool_run_cmd(self, mock_executor, mock_scanner):
+    def test_execute_tool_run_cmd(self, mock_executor):
         """Test executing run_cmd tool."""
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
+            agent = QAAgent(executor=mock_executor)
 
             result = agent._execute_tool("run_cmd", {"command": "systemctl status sshd"})
 
@@ -228,29 +211,19 @@ class TestQAAgentTools:
             assert result["command"] == "systemctl status sshd"
             assert mock_executor.run_command.called
 
-    def test_execute_tool_scan(self, mock_executor, mock_scanner):
-        """Test executing scan tool."""
-        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
-
-            result = agent._execute_tool("scan", {"vulnerability_id": "test_vuln_001"})
-
-            assert result["success"] is True
-            assert "test_vuln_001" in result["stdout"]
-
-    def test_execute_tool_verdict(self, mock_executor, mock_scanner):
+    def test_execute_tool_verdict(self, mock_executor):
         """Test executing verdict tool."""
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
+            agent = QAAgent(executor=mock_executor)
 
             result = agent._execute_tool("verdict", {"message": "System is safe", "safe": True})
 
             assert result["acknowledged"] is True
 
-    def test_execute_tool_unknown(self, mock_executor, mock_scanner):
+    def test_execute_tool_unknown(self, mock_executor):
         """Test executing unknown tool returns error."""
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
+            agent = QAAgent(executor=mock_executor)
 
             result = agent._execute_tool("unknown_tool", {})
 
@@ -263,7 +236,7 @@ class TestQAAgentProcess:
 
     @patch("agents.qa_agent.ToolCallingLLM")
     def test_process_safe_system(
-        self, mock_llm_class, mock_executor, mock_scanner, sample_qa_input
+        self, mock_llm_class, mock_executor, sample_qa_input
     ):
         """Test QA process when system is safe."""
         # Mock LLM session result
@@ -298,7 +271,7 @@ class TestQAAgentProcess:
         mock_llm_class.return_value = mock_llm_instance
 
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
+            agent = QAAgent(executor=mock_executor)
             result = agent.process(sample_qa_input)
 
         assert isinstance(result, QAResult)
@@ -310,7 +283,7 @@ class TestQAAgentProcess:
 
     @patch("agents.qa_agent.ToolCallingLLM")
     def test_process_unsafe_system(
-        self, mock_llm_class, mock_executor, mock_scanner, sample_qa_input
+        self, mock_llm_class, mock_executor, sample_qa_input
     ):
         """Test QA process when system has issues."""
         # Mock LLM session result with safety issue
@@ -337,7 +310,7 @@ class TestQAAgentProcess:
         mock_llm_class.return_value = mock_llm_instance
 
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
+            agent = QAAgent(executor=mock_executor)
             result = agent.process(sample_qa_input)
 
         assert isinstance(result, QAResult)
@@ -349,10 +322,10 @@ class TestQAAgentProcess:
 class TestQAAgentPromptBuilding:
     """Test QA Agent prompt building."""
 
-    def test_build_qa_prompt(self, mock_executor, mock_scanner, sample_qa_input):
+    def test_build_qa_prompt(self, mock_executor, sample_qa_input):
         """Test QA prompt contains all necessary information."""
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
+            agent = QAAgent(executor=mock_executor)
             prompt = agent._build_qa_prompt(sample_qa_input)
 
             # Check key elements are in prompt
@@ -367,10 +340,10 @@ class TestQAAgentPromptBuilding:
 class TestQAAgentServiceExtraction:
     """Test service extraction from commands."""
 
-    def test_extract_services(self, mock_executor, mock_scanner):
+    def test_extract_services(self, mock_executor):
         """Test extracting service names from systemctl commands."""
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=mock_executor, scanner=mock_scanner)
+            agent = QAAgent(executor=mock_executor)
 
             commands = [
                 "systemctl status sshd",
@@ -398,7 +371,7 @@ class TestQAAgentIntegration:
     @patch("subprocess.run")
     @patch("agents.qa_agent.ToolCallingLLM")
     def test_qa_agent_full_workflow(
-        self, mock_llm_class, mock_subprocess, mock_scanner, sample_qa_input
+        self, mock_llm_class, mock_subprocess, sample_qa_input
     ):
         """Test full QA workflow with mocked subprocess."""
         # Mock subprocess to simulate SSH command execution
@@ -437,7 +410,7 @@ class TestQAAgentIntegration:
         )
 
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "test-key"}):
-            agent = QAAgent(executor=executor, scanner=mock_scanner)
+            agent = QAAgent(executor=executor)
             result = agent.process(sample_qa_input)
 
         assert result.safe is True
