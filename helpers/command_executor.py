@@ -121,18 +121,31 @@ class ShellCommandExecutor:
             truncated_stderr=stderr_truncated,
         )
 
-    def write_file(self, file_path: str, content: str) -> RunCommandResult:
-        """Write content to a remote file using base64 encoding to avoid shell escaping issues."""
-        # Use base64 encoding to safely handle special characters
-        content_b64 = base64.b64encode(content.encode()).decode()
-        command = f"echo {shlex.quote(content_b64)} | base64 -d > {shlex.quote(file_path)}"
-        result = self.run_command(command)
+    def write_file(self, file_path: str, content: str, mode: Optional[str] = None) -> RunCommandResult:
+        """
+        Write content to a remote file using base64 encoding to avoid shell escaping issues.
+        Uses temp-file + mv for atomic write. Optionally chmod.
+        """
+        content_b64 = base64.b64encode(content.encode("utf-8")).decode("ascii")
+        target = shlex.quote(file_path)
+        tmp = shlex.quote(f"{file_path}.tmp")
 
-        # Update command in result to be more readable
-        result.command = f"write_file({file_path}, {len(content)} bytes)"
+        # one remote command (still a single bash -lc string)
+        cmd_parts = [
+            f"echo {shlex.quote(content_b64)} | base64 -d > {tmp}",
+        ]
+        if mode:
+            cmd_parts.append(f"chmod {shlex.quote(mode)} {tmp}")
+        cmd_parts.append(f"mv {tmp} {target}")
+
+        command = " && ".join(cmd_parts)
+        # NOTE: your existing system prompt forbids chaining with && for LLM-issued commands,
+        # but this is an internal helper tool. It’s okay as a tool implementation.
+        result = self.run_command(command)
         return result
 
     def read_file(self, file_path: str) -> RunCommandResult:
-        """Read a remote file using cat."""
-        command = f"cat {shlex.quote(file_path)}"
+        """Read a remote file. Returns a clear error if file is missing."""
+        path = shlex.quote(file_path)
+        command = f"test -f {path} && cat {path} || (echo FILE_NOT_FOUND >&2; exit 2)"
         return self.run_command(command)

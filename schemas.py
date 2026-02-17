@@ -88,6 +88,13 @@ class TriageDecision(BaseModel):
 
 
 # Remedy (needed for ReviewInput)
+class RemedyInput(BaseModel):
+    vulnerability: Vulnerability
+    triage_decision: TriageDecision
+    attempt_number: int = 1
+    previous_attempts: List['RemediationAttempt'] = []
+    review_feedback: Optional[str] = None
+    
 class RemediationAttempt(BaseModel):
     finding_id: str
     attempt_number: int = 1
