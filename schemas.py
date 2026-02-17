@@ -47,9 +47,18 @@ class BatchResult(BaseModel):
 
 
 # ============================================================================
+# Multi-Agent Pipeline Schemas (Review Agent dependencies + Review)
 # Multi-Agent Pipeline Schemas
 # ============================================================================
 
+# Triage (needed for ReviewInput)
+class TriageDecision(BaseModel):
+    finding_id: str
+    should_remediate: bool
+    risk_level: str = "medium"  # "low" | "medium" | "high" | "critical"
+    reason: str = ""
+    requires_human_review: bool = False
+    estimated_impact: Optional[str] = None
 # --- Triage Agent Schemas ---
 
 class TriageInput(BaseModel):
@@ -77,43 +86,39 @@ class TriageDecision(BaseModel):
         description="Expected impact of remediation (e.g., 'service restart', 'reboot required')",
     )
 
-# TODO: Remedy Agent Schemas
-# class RemedyInput(BaseModel):
-#     vulnerability: Vulnerability
-#     triage_decision: TriageDecision
-#     attempt_number: int = 1
-#     previous_attempts: List['RemediationAttempt'] = []
-#     review_feedback: Optional[str] = None
-#
-# class RemediationAttempt(BaseModel):
-#     finding_id: str
-#     attempt_number: int
-#     commands_executed: List[str]
-#     files_modified: List[str]
-#     files_read: List[str]
-#     execution_details: List[RunCommandResult]  # Reuse existing!
-#     scan_passed: bool
-#     scan_output: Optional[str] = None
-#     duration: float
-#     success: bool
-#     error_summary: Optional[str] = None
-#     llm_verdict: Optional[ToolVerdict] = None  # Reuse existing!
 
-# TODO: Review Agent Schemas
-# class ReviewInput(BaseModel):
-#     vulnerability: Vulnerability
-#     remediation_attempt: RemediationAttempt
-#     triage_decision: TriageDecision
-#
-# class ReviewVerdict(BaseModel):
-#     finding_id: str
-#     is_optimal: bool
-#     approve: bool
-#     feedback: Optional[str] = None
-#     concerns: List[str] = []
-#     suggested_improvements: List[str] = []
-#     security_score: Optional[int] = None
-#     best_practices_followed: bool = True
+# Remedy (needed for ReviewInput)
+class RemediationAttempt(BaseModel):
+    finding_id: str
+    attempt_number: int = 1
+    commands_executed: List[str] = Field(default_factory=list)
+    files_modified: List[str] = Field(default_factory=list)
+    files_read: List[str] = Field(default_factory=list)
+    execution_details: List[RunCommandResult] = Field(default_factory=list)
+    scan_passed: bool = False
+    scan_output: Optional[str] = None
+    duration: float = 0.0
+    success: bool = False
+    error_summary: Optional[str] = None
+    llm_verdict: Optional[ToolVerdict] = None
+
+
+# Review Agent
+class ReviewInput(BaseModel):
+    vulnerability: Vulnerability
+    remediation_attempt: RemediationAttempt
+    triage_decision: TriageDecision
+
+
+class ReviewVerdict(BaseModel):
+    finding_id: str
+    is_optimal: bool
+    approve: bool
+    feedback: Optional[str] = None
+    concerns: List[str] = Field(default_factory=list)
+    suggested_improvements: List[str] = Field(default_factory=list)
+    security_score: Optional[int] = None  # 1-10
+    best_practices_followed: bool = True
 
 # TODO: QA Agent Schemas
 # class QAInput(BaseModel):
