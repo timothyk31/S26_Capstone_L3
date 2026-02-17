@@ -185,6 +185,11 @@ def load_vulnerabilities(
                     host=entry.get("host", ""),
                     description=entry.get("description"),
                     recommendation=entry.get("recommendation"),
+                    result=entry.get("result"),
+                    rule=entry.get("rule"),
+                    oval_id=entry.get("oval_id"),
+                    scan_class=entry.get("class"),
+                    os=entry.get("os"),
                 )
             )
         except (ValidationError, KeyError) as exc:
@@ -468,6 +473,11 @@ def main() -> int:
                         host=entry.get("host", host or "unknown"),
                         description=entry.get("description"),
                         recommendation=entry.get("recommendation"),
+                        result=entry.get("result"),
+                        rule=entry.get("rule"),
+                        oval_id=entry.get("oval_id"),
+                        scan_class=entry.get("class"),
+                        os=entry.get("os"),
                     )
                 )
             except (ValidationError, KeyError):
@@ -531,6 +541,7 @@ def main() -> int:
             total_rules_scanned=total_rules_scanned,
             rules_passed=rules_passed,
             rules_failed=rules_failed,
+            vulnerabilities=vulns,
         )
         console.print(f"[green]✓ PDF  saved: {pdf_path}[/green]")
 

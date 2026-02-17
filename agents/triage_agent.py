@@ -271,9 +271,9 @@ def _heuristic_triage(v: Vulnerability) -> Optional[_LLMVerdict]:
     if any(
         kw in blob
         for kw in [
-            "separate partition", "separate filesystem", "partition_for_",
-            "mount option", "noexec", "nodev", "nosuid",
+            "separate partition", "separate filesystem"
         ]
+        #"mount option", "partitioning", "filesystem", "fstab", "grub", "bootloader", "fips",
     ):
         return _LLMVerdict(
             finding_id=v.id,
@@ -294,6 +294,7 @@ def _heuristic_triage(v: Vulnerability) -> Optional[_LLMVerdict]:
         )
 
     # Auth / password / PAM / SSH → human review
+    """
     if any(
         kw in blob
         for kw in [
@@ -301,6 +302,7 @@ def _heuristic_triage(v: Vulnerability) -> Optional[_LLMVerdict]:
             "sudoers", "sshd_config", "permitrootlogin", "passwordauthentication",
         ]
     ):
+    
         return _LLMVerdict(
             finding_id=v.id,
             rule_id=v.title,
@@ -320,6 +322,7 @@ def _heuristic_triage(v: Vulnerability) -> Optional[_LLMVerdict]:
             touches_authn_authz=True,
             touches_networking=True,
         )
+        """
 
     return None
 
@@ -527,6 +530,7 @@ class TriageAgent(BaseAgent):
         total_rules_scanned: int = 0,
         rules_passed: int = 0,
         rules_failed: int = 0,
+        vulnerabilities: Optional[List[Vulnerability]] = None,
     ) -> Path:
         """
         Generate a neatly formatted PDF report of triage decisions.
@@ -535,10 +539,11 @@ class TriageAgent(BaseAgent):
         Returns the resolved output path.
         """
         from reportlab.lib import colors
-        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.pagesizes import letter, landscape
         from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
         from reportlab.lib.units import inch
         from reportlab.platypus import (
+            PageBreak,
             Paragraph,
             SimpleDocTemplate,
             Spacer,
@@ -547,14 +552,21 @@ class TriageAgent(BaseAgent):
         )
 
         out = Path(output_path)
+        page_size = landscape(letter)  # landscape to fit all scan columns
         doc = SimpleDocTemplate(
             str(out),
-            pagesize=letter,
-            topMargin=0.75 * inch,
-            bottomMargin=0.75 * inch,
-            leftMargin=0.75 * inch,
-            rightMargin=0.75 * inch,
+            pagesize=page_size,
+            topMargin=0.5 * inch,
+            bottomMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
+            rightMargin=0.5 * inch,
         )
+
+        # Build a lookup from finding_id → Vulnerability for scan columns
+        vuln_map: Dict[str, Vulnerability] = {}
+        if vulnerabilities:
+            for v in vulnerabilities:
+                vuln_map[v.id] = v
 
         styles = getSampleStyleSheet()
         elements: list = []
@@ -669,21 +681,48 @@ class TriageAgent(BaseAgent):
             table_data = [
                 [
                     Paragraph("<b>ID</b>", cell_style),
+                    Paragraph("<b>Rule</b>", cell_style),
+                    Paragraph("<b>Title</b>", cell_style),
+                    Paragraph("<b>Severity</b>", cell_style),
+                    Paragraph("<b>Result</b>", cell_style),
+                    Paragraph("<b>Host</b>", cell_style),
+                    Paragraph("<b>OS</b>", cell_style),
                     Paragraph("<b>Risk</b>", cell_style),
                     Paragraph("<b>Reason</b>", cell_style),
                     Paragraph("<b>Impact</b>", cell_style),
                 ],
             ]
             for d in items:
+                v = vuln_map.get(d.finding_id)
                 risk_text = f'<font color="{_risk_color(d.risk_level).hexval()}">{d.risk_level.upper()}</font>'
+                sev_label = {"0": "Info", "1": "Low", "2": "Medium", "3": "High", "4": "Critical"}.get(
+                    v.severity if v else "", v.severity if v else "\u2014"
+                )
                 table_data.append([
                     Paragraph(d.finding_id, cell_style),
+                    Paragraph((v.rule or "\u2014") if v else "\u2014", cell_style),
+                    Paragraph((v.title or "\u2014")[:80] if v else "\u2014", cell_style),
+                    Paragraph(str(sev_label), cell_style),
+                    Paragraph((v.result or "\u2014").upper() if v else "\u2014", cell_style),
+                    Paragraph((v.host or "\u2014") if v else "\u2014", cell_style),
+                    Paragraph((v.os or "\u2014") if v else "\u2014", cell_style),
                     Paragraph(risk_text, cell_style),
-                    Paragraph(d.reason[:200], cell_style),
-                    Paragraph(d.estimated_impact or "—", cell_style),
+                    Paragraph(d.reason[:150], cell_style),
+                    Paragraph(d.estimated_impact or "\u2014", cell_style),
                 ])
 
-            col_widths = [1.1 * inch, 0.7 * inch, 3.2 * inch, 2.0 * inch]
+            col_widths = [
+                0.7 * inch,   # ID
+                1.2 * inch,   # Rule
+                1.5 * inch,   # Title
+                0.55 * inch,  # Severity
+                0.5 * inch,   # Result
+                0.9 * inch,   # Host
+                0.7 * inch,   # OS
+                0.5 * inch,   # Risk
+                2.2 * inch,   # Reason
+                1.25 * inch,  # Impact
+            ]
             t = Table(table_data, colWidths=col_widths, repeatRows=1)
             t.setStyle(TableStyle([
                 # Header row

@@ -11,6 +11,12 @@ class Vulnerability(BaseModel):
     protocol: Optional[str] = None
     description: Optional[str] = None
     recommendation: Optional[str] = None
+    # OpenSCAP scan fields
+    result: Optional[str] = Field(default=None, description="Scan result status (e.g., fail, error, notchecked)")
+    rule: Optional[str] = Field(default=None, description="Short rule name extracted from XCCDF rule ID")
+    oval_id: Optional[str] = Field(default=None, description="Full XCCDF rule ID / OVAL reference")
+    scan_class: Optional[str] = Field(default=None, description="Finding class (e.g., compliance)")
+    os: Optional[str] = Field(default=None, description="Target OS detected during scan")
 
 class RemediationSuggestion(BaseModel):
     id: str
