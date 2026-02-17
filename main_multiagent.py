@@ -50,7 +50,7 @@
 #     triage_agent = TriageAgent(...)
 #     remedy_agent = RemedyAgent(llm=..., executor=executor, scanner=scanner)
 #     review_agent = ReviewAgent(...)
-#     qa_agent = QAAgent(llm=..., executor=executor, scanner=scanner)
+#     qa_agent = QAAgent(executor=executor)
 #
 #     # Create pipeline factory
 #     def create_pipeline():

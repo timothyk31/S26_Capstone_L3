@@ -132,12 +132,11 @@ class QAResult(BaseModel):
     safe: bool
     side_effects: List[str] = Field(default_factory=list)
     services_affected: List[str] = Field(default_factory=list)
-    system_checks: List[RunCommandResult] = Field(default_factory=list)
+    system_checks: List[RunCommandResult] = Field(default_factory=list)  # Reuse existing!
     regression_detected: bool = False
     other_findings_affected: List[str] = Field(default_factory=list)
-    recommendation: str  # "Approve", "Rollback", "Investigate"
+    recommendation: str = "Investigate"  # "Approve", "Rollback", "Investigate"
     validation_duration: float = 0.0
-
 
 # Aggregation Schemas
 class FindingResult(BaseModel):
