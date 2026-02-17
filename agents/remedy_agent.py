@@ -84,8 +84,8 @@ class RemedyAgent:
         executor: ShellCommandExecutor,
         scanner: Any,  # OpenSCAPScanner-like wrapper that can verify one vuln
         work_dir: Path,
-        max_tool_iterations: int = 24,
-        request_timeout: int = 90,
+        max_tool_iterations: int = 5,
+        request_timeout: int = 30,
     ):
         self.executor = executor
         self.scanner = scanner
