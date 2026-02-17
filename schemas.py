@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
 class Vulnerability(BaseModel):
@@ -120,48 +120,51 @@ class ReviewVerdict(BaseModel):
     security_score: Optional[int] = None  # 1-10
     best_practices_followed: bool = True
 
-# TODO: QA Agent Schemas
-# class QAInput(BaseModel):
-#     vulnerability: Vulnerability
-#     remediation_attempt: RemediationAttempt
-#     review_verdict: ReviewVerdict
-#
-# class QAResult(BaseModel):
-#     finding_id: str
-#     safe: bool
-#     side_effects: List[str] = []
-#     services_affected: List[str] = []
-#     system_checks: List[RunCommandResult] = []  # Reuse existing!
-#     regression_detected: bool = False
-#     other_findings_affected: List[str] = []
-#     recommendation: str  # "Approve", "Rollback", "Investigate"
-#     validation_duration: float
+# QA Agent Schemas
+class QAInput(BaseModel):
+    vulnerability: Vulnerability
+    remediation_attempt: RemediationAttempt
+    review_verdict: ReviewVerdict
 
-# TODO: Aggregation Schemas
-# class FindingResult(BaseModel):
-#     """Complete pipeline result for a single finding"""
-#     vulnerability: Vulnerability
-#     triage: TriageDecision
-#     remediation: Optional[RemediationAttempt] = None
-#     review: Optional[ReviewVerdict] = None
-#     qa: Optional[QAResult] = None
-#     final_status: str  # "success" | "failed" | "discarded" | "requires_human_review"
-#     total_duration: float
-#     timestamp: str
-#
-# class AggregatedReport(BaseModel):
-#     """Final output from entire workflow"""
-#     findings_processed: int
-#     findings_remediated: int
-#     findings_failed: int
-#     findings_discarded: int
-#     results: List[FindingResult]
-#     success_rate: float
-#     total_duration: float
-#     stage_statistics: Dict[str, Any]
-#     ansible_playbook_path: Optional[str] = None
-#     text_report_path: Optional[str] = None
-#     pdf_report_path: Optional[str] = None
-#     scan_profile: str
-#     target_host: str
-#     timestamp: str
+
+class QAResult(BaseModel):
+    finding_id: str
+    safe: bool
+    side_effects: List[str] = Field(default_factory=list)
+    services_affected: List[str] = Field(default_factory=list)
+    system_checks: List[RunCommandResult] = Field(default_factory=list)
+    regression_detected: bool = False
+    other_findings_affected: List[str] = Field(default_factory=list)
+    recommendation: str  # "Approve", "Rollback", "Investigate"
+    validation_duration: float = 0.0
+
+
+# Aggregation Schemas
+class FindingResult(BaseModel):
+    """Complete pipeline result for a single finding"""
+    vulnerability: Vulnerability
+    triage: TriageDecision
+    remediation: Optional[RemediationAttempt] = None
+    review: Optional[ReviewVerdict] = None
+    qa: Optional[QAResult] = None
+    final_status: str  # "success" | "failed" | "discarded" | "requires_human_review"
+    total_duration: float = 0.0
+    timestamp: str = ""
+
+
+class AggregatedReport(BaseModel):
+    """Final output from entire workflow"""
+    findings_processed: int
+    findings_remediated: int
+    findings_failed: int
+    findings_discarded: int
+    results: List[FindingResult] = Field(default_factory=list)
+    success_rate: float
+    total_duration: float = 0.0
+    stage_statistics: Dict[str, Any] = Field(default_factory=dict)
+    ansible_playbook_path: Optional[str] = None
+    text_report_path: Optional[str] = None
+    pdf_report_path: Optional[str] = None
+    scan_profile: str = ""
+    target_host: str = ""
+    timestamp: str = ""
