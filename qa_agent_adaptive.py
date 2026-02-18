@@ -1394,6 +1394,8 @@ class ToolCallingLLM:
                     args = json.loads(raw_args)
                 except Exception:
                     args = {}
+                if not isinstance(args, dict):
+                    args = args[0] if isinstance(args, list) and args and isinstance(args[0], dict) else {}
 
                 payload: Dict[str, Any]
                 if name == "run_command":

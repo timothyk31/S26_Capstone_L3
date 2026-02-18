@@ -124,6 +124,8 @@ class ToolCallingLLM:
                     args = json.loads(raw_args)
                 except Exception:
                     args = {}
+                if not isinstance(args, dict):
+                    args = args[0] if isinstance(args, list) and args and isinstance(args[0], dict) else {}
 
                 # Execute tool via callback
                 payload = self.tool_executor(name, args)

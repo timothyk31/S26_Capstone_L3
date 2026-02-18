@@ -362,6 +362,12 @@ class RemedyAgent:
                 else:
                     args = {}
 
+                # Ensure args is always a dict (json.loads may return a list)
+                if not isinstance(args, dict):
+                    if isinstance(args, list) and args and isinstance(args[0], dict):
+                        args = args[0]
+                    else:
+                        args = {}
 
                 if name == "run_cmd":
                     command = (args.get("command") or "").strip()
