@@ -179,23 +179,38 @@ class ToolCallingLLM:
             "session_label": session_label,
         }
 
-    def _chat(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Send chat completion request to LLM API."""
+    def _chat(self, messages: List[Dict[str, Any]], _retries: int = 3) -> Dict[str, Any]:
+        """Send chat completion request to LLM API with retry on transient errors."""
+        import time as _time
         payload = {
             "model": self.model_name,
             "messages": messages,
             "tools": self.tools,
             "tool_choice": "auto",
         }
-        response = requests.post(
-            self.endpoint,
-            headers=self.headers,
-            json=payload,
-            timeout=self.request_timeout,
-        )
-        if response.status_code >= 400:
-            raise RuntimeError(f"LLM API error {response.status_code}: {response.text}")
-        return response.json()
+        last_exc = None
+        for attempt in range(_retries):
+            try:
+                response = requests.post(
+                    self.endpoint,
+                    headers=self.headers,
+                    json=payload,
+                    timeout=self.request_timeout,
+                )
+                if response.status_code >= 500:
+                    last_exc = RuntimeError(f"LLM API error {response.status_code}: {response.text}")
+                    _time.sleep(2 ** attempt)
+                    continue
+                if response.status_code >= 400:
+                    raise RuntimeError(f"LLM API error {response.status_code}: {response.text}")
+                return response.json()
+            except requests.exceptions.Timeout as exc:
+                last_exc = exc
+                _time.sleep(2 ** attempt)
+            except requests.exceptions.ConnectionError as exc:
+                last_exc = exc
+                _time.sleep(2 ** attempt)
+        raise RuntimeError(f"LLM API failed after {_retries} retries: {last_exc}")
 
     def _format_command_result(self, detail: Dict[str, Any]) -> str:
         """Format command execution result for readability."""

@@ -9,11 +9,14 @@ Default model: nvidia/nemotron-3-nano-30b-a3b:free (use nvidia/nemotron-3-nano-3
 import json
 import os
 import re
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
 from schemas import (
+    FindingResult,
     RemediationAttempt,
     ReviewInput,
     ReviewVerdict,
@@ -213,3 +216,134 @@ class ReviewAgent:
             timeout=self.request_timeout,
         )
         return _parse_verdict(raw, input_data.vulnerability.id)
+
+    # ------------------------------------------------------------------
+    # Output: PDF report
+    # ------------------------------------------------------------------
+    def write_results_pdf(
+        self,
+        results: List[FindingResult],
+        output_path: str | Path = "reports/review_report.pdf",
+        *,
+        target_host: str = "unknown",
+        title: str = "Review Agent Report",
+    ) -> Path:
+        """
+        Generate a PDF report summarising all Review Agent outputs.
+
+        Only includes findings that reached the Review stage.
+        """
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import (
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        page_size = landscape(letter)
+        doc = SimpleDocTemplate(
+            str(out),
+            pagesize=page_size,
+            topMargin=0.5 * inch,
+            bottomMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
+            rightMargin=0.5 * inch,
+        )
+
+        styles = getSampleStyleSheet()
+        elements: list = []
+
+        title_style = ParagraphStyle("RvTitle", parent=styles["Title"], fontSize=20, spaceAfter=6)
+        subtitle_style = ParagraphStyle("RvSub", parent=styles["Normal"], fontSize=10, textColor=colors.grey, spaceAfter=14)
+        section_style = ParagraphStyle("RvSec", parent=styles["Heading2"], fontSize=14, spaceBefore=18, spaceAfter=8, textColor=colors.HexColor("#1a1a2e"))
+        cell_style = ParagraphStyle("RvCell", parent=styles["Normal"], fontSize=8, leading=10)
+        body_style = ParagraphStyle("RvBody", parent=styles["Normal"], fontSize=9, leading=12)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        elements.append(Paragraph(title, title_style))
+        elements.append(Paragraph(f"Target: {target_host} &nbsp;|&nbsp; Generated: {now}", subtitle_style))
+
+        reviewed = [r for r in results if r.review is not None]
+        approved = sum(1 for r in reviewed if r.review and r.review.approve)
+        rejected = len(reviewed) - approved
+        scores = [r.review.security_score for r in reviewed if r.review and r.review.security_score is not None]
+        avg_score = round(sum(scores) / len(scores), 1) if scores else 0.0
+
+        elements.append(Paragraph("Review Summary", section_style))
+        summary_data = [
+            ["Total Reviewed", str(len(reviewed))],
+            ["Approved", str(approved)],
+            ["Rejected", str(rejected)],
+            ["Avg Security Score", str(avg_score)],
+        ]
+        summary_table = Table(summary_data, colWidths=[3 * inch, 1.5 * inch])
+        summary_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#fff3e0")),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 14))
+
+        if not reviewed:
+            elements.append(Paragraph("No findings reached the Review stage.", body_style))
+        else:
+            elements.append(Paragraph("Per-Finding Review Details", section_style))
+            table_data = [
+                [
+                    Paragraph("<b>ID</b>", cell_style),
+                    Paragraph("<b>Title</b>", cell_style),
+                    Paragraph("<b>Approve</b>", cell_style),
+                    Paragraph("<b>Optimal</b>", cell_style),
+                    Paragraph("<b>Score</b>", cell_style),
+                    Paragraph("<b>Feedback</b>", cell_style),
+                    Paragraph("<b>Concerns</b>", cell_style),
+                    Paragraph("<b>Improvements</b>", cell_style),
+                ],
+            ]
+            for r in reviewed:
+                rv = r.review
+                assert rv is not None
+                approve_text = '<font color="#27ae60">YES</font>' if rv.approve else '<font color="#e74c3c">NO</font>'
+                optimal_text = "Yes" if rv.is_optimal else "No"
+                score_text = str(rv.security_score) if rv.security_score is not None else "\u2014"
+                concerns_text = "<br/>".join(rv.concerns[:3]) or "\u2014"
+                improvements_text = "<br/>".join(rv.suggested_improvements[:3]) or "\u2014"
+                table_data.append([
+                    Paragraph(r.vulnerability.id, cell_style),
+                    Paragraph((r.vulnerability.title or "\u2014")[:60], cell_style),
+                    Paragraph(approve_text, cell_style),
+                    Paragraph(optimal_text, cell_style),
+                    Paragraph(score_text, cell_style),
+                    Paragraph((rv.feedback or "\u2014")[:150], cell_style),
+                    Paragraph(concerns_text, cell_style),
+                    Paragraph(improvements_text, cell_style),
+                ])
+
+            col_widths = [0.7 * inch, 1.4 * inch, 0.55 * inch, 0.55 * inch, 0.45 * inch, 2.5 * inch, 1.8 * inch, 2.05 * inch]
+            t = Table(table_data, colWidths=col_widths, repeatRows=1)
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            elements.append(t)
+
+        doc.build(elements)
+        return out

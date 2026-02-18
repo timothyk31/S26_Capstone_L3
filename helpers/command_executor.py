@@ -38,6 +38,23 @@ class ShellCommandExecutor:
             return text[: self.max_output_chars] + "\n...[truncated]...", True
         return text or "", False
 
+    @staticmethod
+    def _strip_ssh_banner(text: str) -> str:
+        """Remove SSH login banners / MOTD noise from stderr so the LLM sees clean output."""
+        if not text:
+            return ""
+        import re
+        # Strip common SSH warnings
+        text = re.sub(r"Warning: Permanently added .+ to the list of known hosts\.\n?", "", text)
+        # Strip USG / DoD login banners (multi-line block starting with "You are accessing")
+        text = re.sub(
+            r"You are accessing a U\.S\. Government.*?See User\s*\nAgreement for details\.\n?",
+            "",
+            text,
+            flags=re.DOTALL,
+        )
+        return text.strip()
+
     def _build_ssh_cmd(self) -> list:
         cmd = [
             "ssh",
@@ -107,6 +124,7 @@ class ShellCommandExecutor:
             duration = time.time() - start
 
         stdout, stdout_truncated = self._truncate(stdout)
+        stderr = self._strip_ssh_banner(stderr)
         stderr, stderr_truncated = self._truncate(stderr)
 
         return RunCommandResult(

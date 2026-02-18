@@ -85,10 +85,11 @@ class Scanner:
                 matched_result = result
                 break
 
-            # Strategy 2: Match by rule name (from parse_openscap)
-            if finding.get("rule") and vuln.title:
-                vuln_rule_name = vuln.title.split("rule_")[-1] if "rule_" in vuln.title else vuln.title
-                finding_rule = finding.get("rule", "")
+            # Strategy 2: Match by rule / oval_id
+            vuln_rule_id = getattr(vuln, 'oval_id', None) or getattr(vuln, 'rule', None) or ""
+            finding_rule = finding.get("rule", "") or finding.get("oval_id", "")
+            if vuln_rule_id and finding_rule:
+                vuln_rule_name = vuln_rule_id.split("rule_")[-1] if "rule_" in vuln_rule_id else vuln_rule_id
                 if vuln_rule_name in finding_rule or finding_rule in vuln_rule_name:
                     result = finding.get("result")
                     still_exists = result in ["fail", "error"]
@@ -122,3 +123,49 @@ class Scanner:
 
         is_fixed = not still_exists
         return is_fixed, output
+
+    def scan_single_rule(self, vuln: Vulnerability) -> Tuple[bool, Optional[str]]:
+        """
+        Check a SINGLE rule via ``oscap --rule``.  Much faster than a full
+        profile scan (~10-30s vs ~5-10min).
+
+        Falls back to full scan if the rule ID cannot be determined or the
+        single-rule scan fails.
+        """
+        rule_id = vuln.oval_id or vuln.rule or ""  # Full XCCDF rule ID
+        if not rule_id or "xccdf_org.ssgproject.content_rule_" not in rule_id:
+            # Cannot determine rule ID — fall back to full scan
+            return self.scan_for_vulnerability(vuln)
+
+        scan_file = self.work_dir / f"verify_rule_{vuln.id}.xml"
+        parsed_file = self.work_dir / f"verify_rule_{vuln.id}.json"
+        remote_xml = f"/tmp/verify_rule_{vuln.id}.xml"
+
+        success = self.scanner.run_scan_rule(
+            profile=self.profile,
+            rule_id=rule_id,
+            output_file=remote_xml,
+            datastream=self.datastream,
+            sudo_password=self.sudo_password,
+        )
+
+        if not success:
+            # Don't fall back to full scan (5-10 min); report failure instead
+            return False, f"Single-rule scan failed for {vuln.id} (rule={rule_id}). Could not verify."
+
+        self.scanner.download_results(remote_xml, str(scan_file))
+        parse_openscap(str(scan_file), str(parsed_file))
+
+        with open(parsed_file) as f:
+            results = json.load(f)
+
+        # With single-rule scan the results list is very short (often 1 entry)
+        for finding in results:
+            result = finding.get("result", "")
+            if result in ["fail", "error"]:
+                return False, f"Vulnerability {vuln.id}: result={result}"
+            if result in ["pass", "fixed", "notapplicable"]:
+                return True, f"Vulnerability {vuln.id}: result={result}"
+
+        # Rule not in results — assume fixed
+        return True, f"Vulnerability {vuln.id} not found in single-rule scan (possibly fixed)"

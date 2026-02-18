@@ -447,6 +447,57 @@ def main() -> int:
     )
     report = aggregator.aggregate(results)
 
+    # ── Per-agent PDF reports ─────────────────────────────────────────
+    report_dir = Path(args.report_dir)
+    report_dir.mkdir(parents=True, exist_ok=True)
+
+    # Triage PDF
+    try:
+        triage_decisions = [r.triage for r in results]
+        triage_vulns = [r.vulnerability for r in results]
+        triage_agent.write_results_pdf(
+            triage_decisions,
+            output_path=report_dir / "triage_report.pdf",
+            target_host=host or "unknown",
+            vulnerabilities=triage_vulns,
+        )
+        console.print(f"[green]Triage PDF: {report_dir / 'triage_report.pdf'}[/green]")
+    except Exception as exc:
+        console.print(f"[yellow]Triage PDF skipped: {exc}[/yellow]")
+
+    # Remedy PDF
+    try:
+        remedy_agent.write_results_pdf(
+            results,
+            output_path=report_dir / "remedy_report.pdf",
+            target_host=host or "unknown",
+        )
+        console.print(f"[green]Remedy PDF: {report_dir / 'remedy_report.pdf'}[/green]")
+    except Exception as exc:
+        console.print(f"[yellow]Remedy PDF skipped: {exc}[/yellow]")
+
+    # Review PDF
+    try:
+        review_agent.write_results_pdf(
+            results,
+            output_path=report_dir / "review_report.pdf",
+            target_host=host or "unknown",
+        )
+        console.print(f"[green]Review PDF: {report_dir / 'review_report.pdf'}[/green]")
+    except Exception as exc:
+        console.print(f"[yellow]Review PDF skipped: {exc}[/yellow]")
+
+    # QA PDF
+    try:
+        qa_agent.write_results_pdf(
+            results,
+            output_path=report_dir / "qa_report.pdf",
+            target_host=host or "unknown",
+        )
+        console.print(f"[green]QA PDF: {report_dir / 'qa_report.pdf'}[/green]")
+    except Exception as exc:
+        console.print(f"[yellow]QA PDF skipped: {exc}[/yellow]")
+
     console.print(f"\n[green]Reports saved to: {args.report_dir}/[/green]")
     if report.ansible_playbook_path:
         console.print(f"[green]Ansible playbook: {report.ansible_playbook_path}[/green]")

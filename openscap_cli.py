@@ -152,6 +152,63 @@ class OpenSCAPScanner:
             console.print(str(e), style="red", markup=False)
             return False
     
+    def run_scan_rule(
+        self,
+        profile: str,
+        rule_id: str,
+        output_file: str = "/tmp/oscap_rule_result.xml",
+        datastream: str = "/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml",
+        sudo_password: Optional[str] = None,
+    ) -> bool:
+        """
+        Run OpenSCAP scan for a SINGLE rule only (much faster than full profile).
+
+        Uses ``oscap xccdf eval --rule <rule_id>`` which evaluates only the
+        specified rule instead of the entire STIG profile (~600 rules).
+
+        Args:
+            profile: Security profile (still required by oscap)
+            rule_id: The full XCCDF rule ID, e.g.
+                     'xccdf_org.ssgproject.content_rule_accounts_password_pam_minlen'
+            output_file: Remote path to save XML results
+            datastream: Path to SCAP datastream on the target
+            sudo_password: Password for sudo if needed
+
+        Returns:
+            True if the scan command completed (exit 0 or 2), False on error.
+        """
+        if sudo_password:
+            oscap_cmd = f"echo '{sudo_password}' | sudo -S oscap xccdf eval --profile {profile} --rule {rule_id}"
+        else:
+            oscap_cmd = f"sudo oscap xccdf eval --profile {profile} --rule {rule_id}"
+
+        oscap_cmd += f" --results {output_file} {datastream}"
+
+        console.print(f"[cyan]Running single-rule scan for {rule_id.split('rule_')[-1]}...[/cyan]")
+
+        try:
+            cmd = self._build_ssh_command(oscap_cmd)
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=120,  # Single rule should finish in <2 min
+            )
+            if result.returncode in [0, 2]:
+                console.print("[green]Single-rule scan completed[/green]")
+                return True
+            else:
+                console.print(f"[red]Single-rule scan failed (exit {result.returncode})[/red]")
+                if result.stderr:
+                    console.print(f"[dim]{result.stderr[-300:]}[/dim]")
+                return False
+        except subprocess.TimeoutExpired:
+            console.print("[red]Single-rule scan timed out (>2 minutes)[/red]")
+            return False
+        except Exception as e:
+            console.print(f"[red]Error running single-rule scan: {e}[/red]")
+            return False
+
     def download_results(self, remote_path: str, local_path: str) -> bool:
         """Download scan results from remote host using scp"""
         try:

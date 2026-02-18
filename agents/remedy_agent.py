@@ -49,13 +49,15 @@
 import json
 import os
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import requests
 
-from schemas import Vulnerability, RemedyInput, RemediationAttempt, ToolVerdict, RunCommandResult
+from schemas import Vulnerability, RemedyInput, RemediationAttempt, FindingResult, ToolVerdict, RunCommandResult
 from helpers.command_executor import ShellCommandExecutor
+from helpers.utils import normalize_command
 
 DEFAULT_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
 DEFAULT_REMEDY_MODEL = os.getenv("REMEDY_AGENT_MODEL") or os.getenv("OPENROUTER_MODEL")  # fallback
@@ -84,8 +86,8 @@ class RemedyAgent:
         executor: ShellCommandExecutor,
         scanner: Any,  # OpenSCAPScanner-like wrapper that can verify one vuln
         work_dir: Path,
-        max_tool_iterations: int = 5,
-        request_timeout: int = 30,
+        max_tool_iterations: int = 15,
+        request_timeout: int = 120,
     ):
         self.executor = executor
         self.scanner = scanner
@@ -148,8 +150,9 @@ class RemedyAgent:
         attempt.execution_details = session_result["execution_details"]
         attempt.llm_verdict = ToolVerdict(message=session_result.get("final_message", ""), resolved=False)
 
-        # Always scan at end (spec requires scan tool, but enforce here too)
-        scan_result = self._tool_scan(vuln)
+        # Reuse the LLM's scan result if it called scan during the session;
+        # otherwise run a single-rule verification scan now.
+        scan_result = session_result.get("last_scan_result") or self._tool_scan(vuln)
         attempt.scan_passed = bool(scan_result.get("pass"))
         attempt.scan_output = scan_result.get("summary") or scan_result.get("raw")
 
@@ -177,7 +180,8 @@ class RemedyAgent:
         previous_attempts: List[RemediationAttempt],
         review_feedback: Optional[str],
     ) -> str:
-        rule_name = vuln.title.replace("xccdf_org.ssgproject.content_rule_", "")
+        rule_id = vuln.oval_id or vuln.rule or vuln.title
+        rule_name = rule_id.replace("xccdf_org.ssgproject.content_rule_", "")
         description = (vuln.description or "").strip()
         recommendation = (vuln.recommendation or "").strip()
 
@@ -187,11 +191,15 @@ class RemedyAgent:
             "Rules:",
             "- Use run_cmd for EXACTLY ONE shell command at a time. Do NOT chain with && ; or multiline scripts.",
             "- Commands run as root. Do not prefix with sudo.",
+            "- ALWAYS use read_file to inspect the target config file BEFORE modifying it.",
+            "- Do NOT append duplicate lines. Use sed -i to modify existing values in-place.",
+            "- If a line is commented (e.g. '# minlen = 8'), uncomment it and set the value.",
             "- Prefer minimal, reversible changes and verify with scan at the end.",
             "",
             "FINDING:",
+            f"- Title: {vuln.title}",
             f"- Rule Name: {rule_name}",
-            f"- Rule ID: {vuln.title}",
+            f"- Rule ID: {rule_id}",
             f"- Finding ID: {vuln.id}",
             f"- Severity: {vuln.severity}",
             f"- Host: {vuln.host}",
@@ -289,8 +297,20 @@ class RemedyAgent:
 
     def _run_tool_session(self, *, user_prompt: str, session_label: str, vuln: Vulnerability) -> Dict[str, Any]:
         system_prompt = (
-            "You are an adaptive remediation agent. Use tools to inspect and remediate the finding. "
-            "One command at a time. End with scan."
+            "You are an adaptive remediation agent on Rocky Linux / RHEL. "
+            "Use tools to inspect and remediate the finding.\n"
+            "STRATEGY:\n"
+            "1. ALWAYS read the relevant config file FIRST with read_file before making changes.\n"
+            "2. Identify the exact key/value that needs changing.\n"
+            "3. Use write_file for config changes (avoids shell quoting issues) or run_cmd for sed/systemctl.\n"
+            "4. Verify with run_cmd (e.g. grep) that the change took effect.\n"
+            "5. Call scan to confirm the fix.\n"
+            "RULES:\n"
+            "- One command at a time. Do NOT chain with && or ;\n"
+            "- This is Rocky Linux/RHEL. Use dnf (not apt). Use systemctl (not service).\n"
+            "- Do NOT duplicate config lines. If a key already exists, modify it in-place with sed.\n"
+            "- If a key is commented out (# minlen = 8), uncomment and set the correct value.\n"
+            "- stderr may contain SSH banners — ignore them. Check exit_code and stdout for results."
         )
 
         messages: List[Dict[str, Any]] = [
@@ -304,10 +324,13 @@ class RemedyAgent:
         files_modified: List[str] = []
         execution_details: List[RunCommandResult] = []
         final_message: str = ""
+        last_scan_result: Optional[Dict[str, Any]] = None  # Track LLM-initiated scans
 
         tool_calls_used = 0
+        total_turns = 0  # Counts ALL LLM round-trips (tool + reasoning)
 
-        while tool_calls_used < self.max_tool_iterations:
+        while tool_calls_used < self.max_tool_iterations and total_turns < self.max_tool_iterations + 6:
+            total_turns += 1
             resp = self._chat(messages)
             msg = resp["choices"][0]["message"]
 
@@ -316,9 +339,9 @@ class RemedyAgent:
 
             tool_calls = msg.get("tool_calls") or []
             if not tool_calls:
-                # Assistant might be reasoning; let it continue a few turns
+                # Assistant is reasoning; allow a few turns then stop
                 final_message = msg.get("content") or final_message
-                if tool_calls_used > 6:
+                if total_turns > tool_calls_used + 4:
                     break
                 continue
 
@@ -364,8 +387,9 @@ class RemedyAgent:
                     payload = result.model_dump()
 
                 elif name == "scan":
-                    # Let LLM call scan during the attempt, but we'll scan again at end anyway.
-                    payload = self._tool_scan(vuln)
+                    scan_payload = self._tool_scan(vuln)
+                    last_scan_result = scan_payload  # Cache so process() can reuse
+                    payload = scan_payload
                 else:
                     payload = {"error": f"Unknown tool {name}"}
 
@@ -391,36 +415,188 @@ class RemedyAgent:
             "files_modified": files_modified,
             "execution_details": execution_details,
             "final_message": final_message,
+            "last_scan_result": last_scan_result,
         }
 
-    def _chat(self, messages: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _chat(self, messages: List[Dict[str, Any]], _retries: int = 3) -> Dict[str, Any]:
         payload = {
             "model": self.model_name,
             "messages": messages,
             "tools": self._tools_spec(),
             "tool_choice": "auto",
         }
-        r = requests.post(self.endpoint, headers=self.headers, json=payload, timeout=self.request_timeout)
-        if r.status_code >= 400:
-            raise RuntimeError(f"LLM API error {r.status_code}: {r.text}")
-        return r.json()
+        last_exc: Optional[Exception] = None
+        for attempt in range(_retries):
+            try:
+                r = requests.post(self.endpoint, headers=self.headers, json=payload, timeout=self.request_timeout)
+                if r.status_code >= 500:
+                    last_exc = RuntimeError(f"LLM API error {r.status_code}: {r.text}")
+                    time.sleep(2 ** attempt)
+                    continue
+                if r.status_code >= 400:
+                    raise RuntimeError(f"LLM API error {r.status_code}: {r.text}")
+                return r.json()
+            except requests.exceptions.Timeout as exc:
+                last_exc = exc
+                time.sleep(2 ** attempt)
+            except requests.exceptions.ConnectionError as exc:
+                last_exc = exc
+                time.sleep(2 ** attempt)
+        raise RuntimeError(f"LLM API failed after {_retries} retries: {last_exc}")
 
     # -------------------------
     # Tool implementations
     # -------------------------
 
     def _tool_run_cmd(self, command: str) -> RunCommandResult:
-        # You can re-add normalization later if you want (copy from qa_agent_adaptive._normalize_command)
+        command = normalize_command(command)
         return self.executor.run_command(command)
 
     def _tool_scan(self, vuln: Vulnerability) -> Dict[str, Any]:
         """
-        scanner.scan_for_vulnerability returns (is_fixed, scan_output)
+        Use single-rule scan for fast verification (~10-30s instead of ~5-10min).
+        Falls back to full scan if single-rule is unavailable.
         """
-        is_fixed, output = self.scanner.scan_for_vulnerability(vuln)
+        is_fixed, output = self.scanner.scan_single_rule(vuln)
         return {
             "pass": bool(is_fixed),
             "summary": output,
             "raw": None,
         }
+
+    # ------------------------------------------------------------------
+    # Output: PDF report
+    # ------------------------------------------------------------------
+    def write_results_pdf(
+        self,
+        results: List[FindingResult],
+        output_path: str | Path = "reports/remedy_report.pdf",
+        *,
+        target_host: str = "unknown",
+        title: str = "Remedy Agent Report",
+    ) -> Path:
+        """
+        Generate a PDF report summarising all Remedy Agent outputs.
+
+        Only includes findings that reached the Remedy stage (have a
+        RemediationAttempt).
+        """
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import (
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        page_size = landscape(letter)
+        doc = SimpleDocTemplate(
+            str(out),
+            pagesize=page_size,
+            topMargin=0.5 * inch,
+            bottomMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
+            rightMargin=0.5 * inch,
+        )
+
+        styles = getSampleStyleSheet()
+        elements: list = []
+
+        title_style = ParagraphStyle("RTitle", parent=styles["Title"], fontSize=20, spaceAfter=6)
+        subtitle_style = ParagraphStyle("RSub", parent=styles["Normal"], fontSize=10, textColor=colors.grey, spaceAfter=14)
+        section_style = ParagraphStyle("RSec", parent=styles["Heading2"], fontSize=14, spaceBefore=18, spaceAfter=8, textColor=colors.HexColor("#1a1a2e"))
+        cell_style = ParagraphStyle("RCell", parent=styles["Normal"], fontSize=8, leading=10)
+        body_style = ParagraphStyle("RBody", parent=styles["Normal"], fontSize=9, leading=12)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        elements.append(Paragraph(title, title_style))
+        elements.append(Paragraph(f"Target: {target_host} &nbsp;|&nbsp; Generated: {now}", subtitle_style))
+
+        # Filter to findings that have a remediation attempt
+        remedied = [r for r in results if r.remediation is not None]
+
+        passed = sum(1 for r in remedied if r.remediation and r.remediation.scan_passed)
+        failed = len(remedied) - passed
+        avg_attempts = (
+            round(sum(r.remediation.attempt_number for r in remedied if r.remediation) / len(remedied), 2)
+            if remedied else 0.0
+        )
+
+        elements.append(Paragraph("Remedy Summary", section_style))
+        summary_data = [
+            ["Total Remediation Attempts", str(len(remedied))],
+            ["Scan Passed", str(passed)],
+            ["Scan Failed", str(failed)],
+            ["Avg Attempt #", str(avg_attempts)],
+        ]
+        summary_table = Table(summary_data, colWidths=[3 * inch, 1.5 * inch])
+        summary_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e3f2fd")),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 14))
+
+        if not remedied:
+            elements.append(Paragraph("No findings reached the Remedy stage.", body_style))
+        else:
+            elements.append(Paragraph("Per-Finding Remedy Details", section_style))
+            table_data = [
+                [
+                    Paragraph("<b>ID</b>", cell_style),
+                    Paragraph("<b>Title</b>", cell_style),
+                    Paragraph("<b>Attempt</b>", cell_style),
+                    Paragraph("<b>Scan</b>", cell_style),
+                    Paragraph("<b>Duration</b>", cell_style),
+                    Paragraph("<b>Commands</b>", cell_style),
+                    Paragraph("<b>Files Modified</b>", cell_style),
+                    Paragraph("<b>Error</b>", cell_style),
+                ],
+            ]
+            for r in remedied:
+                rm = r.remediation
+                assert rm is not None
+                scan_text = '<font color="#27ae60">PASS</font>' if rm.scan_passed else '<font color="#e74c3c">FAIL</font>'
+                cmds_text = "<br/>".join(rm.commands_executed[:5]) or "\u2014"
+                if len(rm.commands_executed) > 5:
+                    cmds_text += f"<br/>... +{len(rm.commands_executed) - 5} more"
+                files_text = "<br/>".join(rm.files_modified[:3]) or "\u2014"
+                table_data.append([
+                    Paragraph(r.vulnerability.id, cell_style),
+                    Paragraph((r.vulnerability.title or "\u2014")[:60], cell_style),
+                    Paragraph(str(rm.attempt_number), cell_style),
+                    Paragraph(scan_text, cell_style),
+                    Paragraph(f"{rm.duration:.1f}s", cell_style),
+                    Paragraph(cmds_text, cell_style),
+                    Paragraph(files_text, cell_style),
+                    Paragraph((rm.error_summary or "\u2014")[:100], cell_style),
+                ])
+
+            col_widths = [0.7 * inch, 1.4 * inch, 0.5 * inch, 0.5 * inch, 0.55 * inch, 3.0 * inch, 1.5 * inch, 1.85 * inch]
+            t = Table(table_data, colWidths=col_widths, repeatRows=1)
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            elements.append(t)
+
+        doc.build(elements)
+        return out
 

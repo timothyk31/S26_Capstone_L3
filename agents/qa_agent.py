@@ -6,12 +6,14 @@ Tools: run_cmd (1 tool for validation checks).
 
 import os
 import time
+from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from helpers.command_executor import ShellCommandExecutor
 from helpers.llm_base import ToolCallingLLM
 from helpers.utils import annotate_error_categories, normalize_command
-from schemas import QAInput, QAResult, RunCommandResult
+from schemas import FindingResult, QAInput, QAResult, RunCommandResult
 
 
 class QAAgent:
@@ -44,7 +46,7 @@ class QAAgent:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         max_tool_iterations: int = 24,
-        request_timeout: int = 90,
+        request_timeout: int = 120,
     ):
         """
         Initialize QA Agent.
@@ -271,3 +273,132 @@ class QAAgent:
                     if service not in services:
                         services.append(service)
         return services
+
+    # ------------------------------------------------------------------
+    # Output: PDF report
+    # ------------------------------------------------------------------
+    def write_results_pdf(
+        self,
+        results: List[FindingResult],
+        output_path: str | Path = "reports/qa_report.pdf",
+        *,
+        target_host: str = "unknown",
+        title: str = "QA Agent Report",
+    ) -> Path:
+        """
+        Generate a PDF report summarising all QA Agent outputs.
+
+        Only includes findings that reached the QA stage.
+        """
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import (
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        page_size = landscape(letter)
+        doc = SimpleDocTemplate(
+            str(out),
+            pagesize=page_size,
+            topMargin=0.5 * inch,
+            bottomMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
+            rightMargin=0.5 * inch,
+        )
+
+        styles = getSampleStyleSheet()
+        elements: list = []
+
+        title_style = ParagraphStyle("QTitle", parent=styles["Title"], fontSize=20, spaceAfter=6)
+        subtitle_style = ParagraphStyle("QSub", parent=styles["Normal"], fontSize=10, textColor=colors.grey, spaceAfter=14)
+        section_style = ParagraphStyle("QSec", parent=styles["Heading2"], fontSize=14, spaceBefore=18, spaceAfter=8, textColor=colors.HexColor("#1a1a2e"))
+        cell_style = ParagraphStyle("QCell", parent=styles["Normal"], fontSize=8, leading=10)
+        body_style = ParagraphStyle("QBody", parent=styles["Normal"], fontSize=9, leading=12)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        elements.append(Paragraph(title, title_style))
+        elements.append(Paragraph(f"Target: {target_host} &nbsp;|&nbsp; Generated: {now}", subtitle_style))
+
+        qa_items = [r for r in results if r.qa is not None]
+        safe_count = sum(1 for r in qa_items if r.qa and r.qa.safe)
+        unsafe_count = len(qa_items) - safe_count
+        regressions = sum(1 for r in qa_items if r.qa and r.qa.regression_detected)
+
+        elements.append(Paragraph("QA Validation Summary", section_style))
+        summary_data = [
+            ["Total QA Validated", str(len(qa_items))],
+            ["Safe", str(safe_count)],
+            ["Unsafe", str(unsafe_count)],
+            ["Regressions Detected", str(regressions)],
+        ]
+        summary_table = Table(summary_data, colWidths=[3 * inch, 1.5 * inch])
+        summary_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e8f5e9")),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 14))
+
+        if not qa_items:
+            elements.append(Paragraph("No findings reached the QA stage.", body_style))
+        else:
+            elements.append(Paragraph("Per-Finding QA Details", section_style))
+            table_data = [
+                [
+                    Paragraph("<b>ID</b>", cell_style),
+                    Paragraph("<b>Title</b>", cell_style),
+                    Paragraph("<b>Safe</b>", cell_style),
+                    Paragraph("<b>Regression</b>", cell_style),
+                    Paragraph("<b>Recommendation</b>", cell_style),
+                    Paragraph("<b>Side Effects</b>", cell_style),
+                    Paragraph("<b>Services Affected</b>", cell_style),
+                    Paragraph("<b>Duration</b>", cell_style),
+                ],
+            ]
+            for r in qa_items:
+                qa = r.qa
+                assert qa is not None
+                safe_text = '<font color="#27ae60">SAFE</font>' if qa.safe else '<font color="#e74c3c">UNSAFE</font>'
+                reg_text = '<font color="#e74c3c">YES</font>' if qa.regression_detected else "No"
+                side_text = "<br/>".join(qa.side_effects[:3]) or "\u2014"
+                svc_text = "<br/>".join(qa.services_affected[:3]) or "\u2014"
+                table_data.append([
+                    Paragraph(r.vulnerability.id, cell_style),
+                    Paragraph((r.vulnerability.title or "\u2014")[:60], cell_style),
+                    Paragraph(safe_text, cell_style),
+                    Paragraph(reg_text, cell_style),
+                    Paragraph(qa.recommendation, cell_style),
+                    Paragraph(side_text, cell_style),
+                    Paragraph(svc_text, cell_style),
+                    Paragraph(f"{qa.validation_duration:.1f}s", cell_style),
+                ])
+
+            col_widths = [0.7 * inch, 1.6 * inch, 0.5 * inch, 0.7 * inch, 0.9 * inch, 2.0 * inch, 1.8 * inch, 0.6 * inch]
+            t = Table(table_data, colWidths=col_widths, repeatRows=1)
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            elements.append(t)
+
+        doc.build(elements)
+        return out

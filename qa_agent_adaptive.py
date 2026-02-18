@@ -171,11 +171,11 @@ class AdaptiveQAAgent:
                 if still_exists:
                     break
             
-            # Strategy 2: Match by rule name (from parse_openscap, rule field contains short name)
-            if finding.get('rule') and vuln.title:
-                # Extract rule name from vuln.title (last part after rule_)
-                vuln_rule_name = vuln.title.split('rule_')[-1] if 'rule_' in vuln.title else vuln.title
-                finding_rule = finding.get('rule', '')
+            # Strategy 2: Match by rule / oval_id
+            vuln_rule_id = getattr(vuln, 'oval_id', None) or getattr(vuln, 'rule', None) or ''
+            finding_rule = finding.get('rule', '') or finding.get('oval_id', '')
+            if vuln_rule_id and finding_rule:
+                vuln_rule_name = vuln_rule_id.split('rule_')[-1] if 'rule_' in vuln_rule_id else vuln_rule_id
                 if vuln_rule_name in finding_rule or finding_rule in vuln_rule_name:
                     still_exists = finding.get('result') in ['fail', 'error']
                     if still_exists:
@@ -202,7 +202,8 @@ class AdaptiveQAAgent:
     
     def _build_agent_prompt(self, vuln: Vulnerability, previous_attempts: List[Dict[str, Any]]) -> str:
         """Construct the user-facing prompt for the agentic remediation loop."""
-        rule_name = vuln.title.replace('xccdf_org.ssgproject.content_rule_', '')
+        rule_id = getattr(vuln, 'oval_id', None) or getattr(vuln, 'rule', None) or vuln.title
+        rule_name = rule_id.replace('xccdf_org.ssgproject.content_rule_', '')
         description = (getattr(vuln, 'description', '') or '').strip()
         recommendation = (getattr(vuln, 'recommendation', '') or '').strip()
 
@@ -211,7 +212,7 @@ class AdaptiveQAAgent:
             "",
             "VULNERABILITY:",
             f"- Rule Name: {rule_name}",
-            f"- Rule ID: {vuln.title}",
+            f"- Rule ID: {rule_id}",
             f"- Severity: {vuln.severity} (0=info, 4=critical)",
             f"- Host: {vuln.host}",
         ]

@@ -213,7 +213,10 @@ def _build_prompt(v: Vulnerability) -> str:
         "Policy:\n"
         "- Be conservative. If unclear, choose requires_human_review.\n"
         "- Mark too_dangerous_to_remediate for partitioning/filesystem/bootloader/FIPS changes.\n"
-        "- Mark requires_human_review for auth/ssh/sudo/pam/password changes.\n"
+        "- Mark requires_human_review for auth/ssh/sudo/pam changes that could lock out access, "
+        "EXCEPT password-related rules.\n"
+        "- Mark safe_to_remediate for password policy/complexity/expiration/history rules "
+        "(pwquality, chage, password length, password age, password complexity, lockout, etc.).\n"
         "- Mark safe_to_remediate for low-risk package installs, service enablement, "
         "sysctl persistence that is unlikely to lock out access.\n"
     )
