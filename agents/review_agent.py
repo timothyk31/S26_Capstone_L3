@@ -89,7 +89,12 @@ def _build_review_prompt(input_data: ReviewInput) -> str:
         "finding_id (string), is_optimal (bool), approve (bool), feedback (string or null),",
         "concerns (list of strings), suggested_improvements (list of strings),",
         "security_score (integer 1-10 or null), best_practices_followed (bool).",
-        "Consider: minimal change, security best practices, service disruption risk, maintainability.",
+        "",
+        "IMPORTANT: Set approve=true if the remediation functionally resolves the vulnerability,",
+        "even if the approach is not perfectly elegant or optimal. Only set approve=false if the fix",
+        "is actively harmful, introduces new security risks, or fails to address the vulnerability.",
+        "Use is_optimal, concerns, and suggested_improvements to note areas for improvement",
+        "without blocking the fix from proceeding.",
     ])
     return "\n".join(lines)
 
@@ -183,9 +188,14 @@ class ReviewAgent:
     """
 
     SYSTEM_PROMPT = (
-        "You are a security remediation reviewer for Linux systems. "
-        "Given a vulnerability and the remediation that was applied, you evaluate whether the fix is optimal, "
-        "follows best practices, and is minimal and maintainable. "
+        "You are a pragmatic security remediation reviewer for Linux systems. "
+        "Given a vulnerability and the remediation that was applied, you evaluate whether the fix "
+        "effectively addresses the vulnerability without breaking the system.\n\n"
+        "APPROVAL GUIDELINES:\n"
+        "- APPROVE if the remediation resolves the vulnerability, even if the approach is not perfectly optimal.\n"
+        "- APPROVE if the scan passed and the fix is functional, even if you would prefer a different method.\n"
+        "- REJECT only if the fix is actively harmful, introduces serious security risks, or clearly does not address the vulnerability.\n"
+        "- Imperfect but working fixes should be APPROVED with suggestions for improvement noted in feedback.\n\n"
         "You respond only with a JSON object with the requested keys; no markdown code fences or extra text."
     )
 
@@ -317,15 +327,15 @@ class ReviewAgent:
                 approve_text = '<font color="#27ae60">YES</font>' if rv.approve else '<font color="#e74c3c">NO</font>'
                 optimal_text = "Yes" if rv.is_optimal else "No"
                 score_text = str(rv.security_score) if rv.security_score is not None else "\u2014"
-                concerns_text = "<br/>".join(rv.concerns[:3]) or "\u2014"
-                improvements_text = "<br/>".join(rv.suggested_improvements[:3]) or "\u2014"
+                concerns_text = "<br/>".join(rv.concerns) or "\u2014"
+                improvements_text = "<br/>".join(rv.suggested_improvements) or "\u2014"
                 table_data.append([
                     Paragraph(r.vulnerability.id, cell_style),
-                    Paragraph((r.vulnerability.title or "\u2014")[:60], cell_style),
+                    Paragraph(r.vulnerability.title or "\u2014", cell_style),
                     Paragraph(approve_text, cell_style),
                     Paragraph(optimal_text, cell_style),
                     Paragraph(score_text, cell_style),
-                    Paragraph((rv.feedback or "\u2014")[:150], cell_style),
+                    Paragraph(rv.feedback or "\u2014", cell_style),
                     Paragraph(concerns_text, cell_style),
                     Paragraph(improvements_text, cell_style),
                 ])

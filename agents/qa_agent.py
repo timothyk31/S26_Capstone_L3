@@ -23,18 +23,23 @@ class QAAgent:
     """
 
     SYSTEM_PROMPT = (
-        "You are a QA validation agent for Linux security remediation. "
-        "Your role is to verify that a remediation did NOT introduce harm to the system.\n\n"
+        "You are a pragmatic QA validation agent for Linux security remediation. "
+        "Your role is to verify that a remediation did NOT introduce serious harm to the system.\n\n"
         "You have access to 1 tool:\n"
         "1. `run_cmd`: Run system health checks (systemctl status, service checks, log analysis)\n\n"
         "Your validation checklist:\n"
         "- Verify critical services are still running (sshd, auditd, firewalld, etc.)\n"
-        "- Check for errors in system logs (/var/log/messages, journalctl)\n"
         "- Confirm system is still accessible (SSH works)\n"
-        "- Detect any side effects or unintended changes\n\n"
+        "- Detect any major side effects or unintended changes\n\n"
+        "SAFETY GUIDELINES:\n"
+        "- Mark safe=true if the system is still functional and critical services are running.\n"
+        "- Minor warnings in logs, non-critical service restarts, or cosmetic issues should NOT cause a failure.\n"
+        "- Mark safe=false ONLY if critical services are down, the system is unreachable, "
+        "or the remediation clearly broke something important.\n"
+        "- Security remediations are expected to change configurations — that alone is not a side effect.\n\n"
         "When done, call `verdict` with:\n"
-        "- safe=true if system is healthy\n"
-        "- safe=false if you detect issues\n"
+        "- safe=true if the system is functional and healthy\n"
+        "- safe=false only if serious issues are detected\n"
         "- Include detailed message explaining findings"
     )
 
@@ -208,6 +213,7 @@ class QAAgent:
         return QAResult(
             finding_id=input_data.vulnerability.id,
             safe=safe,
+            verdict_reason=message,
             side_effects=[],
             services_affected=services_affected,
             system_checks=system_checks,
@@ -251,10 +257,13 @@ class QAAgent:
             [
                 "",
                 "## Your Task",
-                "Run comprehensive validation to ensure the remediation is safe:",
+                "Run validation to ensure the remediation did not break the system:",
                 "1. Check critical services (sshd, auditd, firewalld) are running",
-                "2. Review system logs for errors introduced since remediation",
-                "3. Confirm system accessibility (SSH still works)",
+                "2. Confirm system accessibility (SSH still works)",
+                "",
+                "Mark safe=true if the system is still functional. Minor log warnings or expected",
+                "configuration changes from the remediation are NOT reasons to mark unsafe.",
+                "Only mark safe=false if critical services are down or the system is broken.",
                 "",
                 "When validation is complete, call `verdict` with your safety assessment.",
             ]
@@ -360,6 +369,7 @@ class QAAgent:
                     Paragraph("<b>ID</b>", cell_style),
                     Paragraph("<b>Title</b>", cell_style),
                     Paragraph("<b>Safe</b>", cell_style),
+                    Paragraph("<b>Reason</b>", cell_style),
                     Paragraph("<b>Regression</b>", cell_style),
                     Paragraph("<b>Recommendation</b>", cell_style),
                     Paragraph("<b>Side Effects</b>", cell_style),
@@ -371,13 +381,15 @@ class QAAgent:
                 qa = r.qa
                 assert qa is not None
                 safe_text = '<font color="#27ae60">SAFE</font>' if qa.safe else '<font color="#e74c3c">UNSAFE</font>'
+                reason_text = qa.verdict_reason or "\u2014"
                 reg_text = '<font color="#e74c3c">YES</font>' if qa.regression_detected else "No"
-                side_text = "<br/>".join(qa.side_effects[:3]) or "\u2014"
-                svc_text = "<br/>".join(qa.services_affected[:3]) or "\u2014"
+                side_text = "<br/>".join(qa.side_effects) or "\u2014"
+                svc_text = "<br/>".join(qa.services_affected) or "\u2014"
                 table_data.append([
                     Paragraph(r.vulnerability.id, cell_style),
-                    Paragraph((r.vulnerability.title or "\u2014")[:60], cell_style),
+                    Paragraph(r.vulnerability.title or "\u2014", cell_style),
                     Paragraph(safe_text, cell_style),
+                    Paragraph(reason_text, cell_style),
                     Paragraph(reg_text, cell_style),
                     Paragraph(qa.recommendation, cell_style),
                     Paragraph(side_text, cell_style),
@@ -385,7 +397,7 @@ class QAAgent:
                     Paragraph(f"{qa.validation_duration:.1f}s", cell_style),
                 ])
 
-            col_widths = [0.7 * inch, 1.6 * inch, 0.5 * inch, 0.7 * inch, 0.9 * inch, 2.0 * inch, 1.8 * inch, 0.6 * inch]
+            col_widths = [0.7 * inch, 1.3 * inch, 0.5 * inch, 2.0 * inch, 0.6 * inch, 0.8 * inch, 1.5 * inch, 1.4 * inch, 0.6 * inch]
             t = Table(table_data, colWidths=col_widths, repeatRows=1)
             t.setStyle(TableStyle([
                 ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),

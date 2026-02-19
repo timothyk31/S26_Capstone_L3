@@ -48,7 +48,8 @@ class OpenSCAPScanner:
         """Check if OpenSCAP is installed on target"""
         try:
             cmd = self._build_ssh_command("which oscap")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10,
+                                    encoding="utf-8", errors="replace")
             return result.returncode == 0
         except Exception as e:
             console.print(f"[red]Error checking OpenSCAP installation: {e}[/red]")
@@ -58,7 +59,8 @@ class OpenSCAPScanner:
         """List available security profiles on target"""
         try:
             cmd = self._build_ssh_command(f"oscap info {profile_file}")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=30,
+                                    encoding="utf-8", errors="replace")
             
             if result.returncode != 0:
                 console.print(f"[yellow]Warning: Could not list profiles: {result.stderr}[/yellow]")
@@ -129,7 +131,9 @@ class OpenSCAPScanner:
                 cmd, 
                 capture_output=True, 
                 text=True, 
-                timeout=600  # 10 minute timeout for scan
+                timeout=600,  # 10 minute timeout for scan
+                encoding="utf-8",
+                errors="replace",
             )
             
             # Check if scan completed (exit code 2 means findings, which is OK)
@@ -193,6 +197,8 @@ class OpenSCAPScanner:
                 capture_output=True,
                 text=True,
                 timeout=120,  # Single rule should finish in <2 min
+                encoding="utf-8",
+                errors="replace",
             )
             if result.returncode in [0, 2]:
                 console.print("[green]Single-rule scan completed[/green]")
@@ -225,7 +231,8 @@ class OpenSCAPScanner:
                 local_path
             ])
             
-            result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60)
+            result = subprocess.run(scp_cmd, capture_output=True, text=True, timeout=60,
+                                    encoding="utf-8", errors="replace")
             
             if result.returncode == 0:
                 console.print(f"[green]Results downloaded to {local_path}[/green]")

@@ -208,7 +208,7 @@ class Pipeline:
 
         # ── Stage 4: QA ───────────────────────────────────────────────
         qa_result = None
-        if remediation is not None and remediation.scan_passed and review_verdict is not None:
+        if remediation is not None and remediation.scan_passed and review_verdict is not None and review_verdict.approve:
             console.print(f"[bold cyan]  [{vid}] Stage 4/4: QA Validation[/bold cyan]")
             qa_input = QAInput(
                 vulnerability=vulnerability,

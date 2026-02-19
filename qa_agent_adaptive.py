@@ -1244,6 +1244,8 @@ class ShellCommandExecutor:
                 capture_output=True,
                 text=True,
                 timeout=self.command_timeout,
+                encoding="utf-8",
+                errors="replace",
             )
             stdout = completed.stdout or ""
             stderr = completed.stderr or ""

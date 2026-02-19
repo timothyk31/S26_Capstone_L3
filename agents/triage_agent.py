@@ -704,13 +704,13 @@ class TriageAgent(BaseAgent):
                 table_data.append([
                     Paragraph(d.finding_id, cell_style),
                     Paragraph((v.rule or "\u2014") if v else "\u2014", cell_style),
-                    Paragraph((v.title or "\u2014")[:80] if v else "\u2014", cell_style),
+                    Paragraph((v.title or "\u2014") if v else "\u2014", cell_style),
                     Paragraph(str(sev_label), cell_style),
                     Paragraph((v.result or "\u2014").upper() if v else "\u2014", cell_style),
                     Paragraph((v.host or "\u2014") if v else "\u2014", cell_style),
                     Paragraph((v.os or "\u2014") if v else "\u2014", cell_style),
                     Paragraph(risk_text, cell_style),
-                    Paragraph(d.reason[:150], cell_style),
+                    Paragraph(d.reason, cell_style),
                     Paragraph(d.estimated_impact or "\u2014", cell_style),
                 ])
 

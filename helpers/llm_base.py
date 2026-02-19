@@ -152,6 +152,7 @@ class ToolCallingLLM:
                     verdict = {
                         "message": args.get("message", ""),
                         "resolved": bool(args.get("resolved")),
+                        "safe": bool(args.get("safe")),
                     }
 
                 tool_entry = {

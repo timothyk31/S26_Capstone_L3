@@ -573,19 +573,17 @@ class RemedyAgent:
                 rm = r.remediation
                 assert rm is not None
                 scan_text = '<font color="#27ae60">PASS</font>' if rm.scan_passed else '<font color="#e74c3c">FAIL</font>'
-                cmds_text = "<br/>".join(rm.commands_executed[:5]) or "\u2014"
-                if len(rm.commands_executed) > 5:
-                    cmds_text += f"<br/>... +{len(rm.commands_executed) - 5} more"
-                files_text = "<br/>".join(rm.files_modified[:3]) or "\u2014"
+                cmds_text = "<br/>".join(rm.commands_executed) or "\u2014"
+                files_text = "<br/>".join(rm.files_modified) or "\u2014"
                 table_data.append([
                     Paragraph(r.vulnerability.id, cell_style),
-                    Paragraph((r.vulnerability.title or "\u2014")[:60], cell_style),
+                    Paragraph(r.vulnerability.title or "\u2014", cell_style),
                     Paragraph(str(rm.attempt_number), cell_style),
                     Paragraph(scan_text, cell_style),
                     Paragraph(f"{rm.duration:.1f}s", cell_style),
                     Paragraph(cmds_text, cell_style),
                     Paragraph(files_text, cell_style),
-                    Paragraph((rm.error_summary or "\u2014")[:100], cell_style),
+                    Paragraph(rm.error_summary or "\u2014", cell_style),
                 ])
 
             col_widths = [0.7 * inch, 1.4 * inch, 0.5 * inch, 0.5 * inch, 0.55 * inch, 3.0 * inch, 1.5 * inch, 1.85 * inch]

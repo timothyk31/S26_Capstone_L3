@@ -137,6 +137,7 @@ class QAInput(BaseModel):
 class QAResult(BaseModel):
     finding_id: str
     safe: bool
+    verdict_reason: str = ""  # LLM explanation of why safe/unsafe
     side_effects: List[str] = Field(default_factory=list)
     services_affected: List[str] = Field(default_factory=list)
     system_checks: List[RunCommandResult] = Field(default_factory=list)  # Reuse existing!
