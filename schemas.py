@@ -48,7 +48,7 @@ class BatchResult(BaseModel):
 
 # ============================================================================
 # Multi-Agent Pipeline Schemas (Review Agent dependencies + Review)
-# Multi-Agent Pipeline Schemas
+# Multi-Agent Pipeline Schemas — OLD (v1 pipeline)
 # ============================================================================
 
 # Triage (needed for ReviewInput)
@@ -166,6 +166,52 @@ class AggregatedReport(BaseModel):
     findings_failed: int
     findings_discarded: int
     results: List[FindingResult] = Field(default_factory=list)
+    success_rate: float
+    total_duration: float = 0.0
+    stage_statistics: Dict[str, Any] = Field(default_factory=dict)
+    ansible_playbook_path: Optional[str] = None
+    text_report_path: Optional[str] = None
+    pdf_report_path: Optional[str] = None
+    scan_profile: str = ""
+    target_host: str = ""
+    timestamp: str = ""
+
+
+# ============================================================================
+# NEW (v2 pipeline) — Remedy calls Review → Review calls QA before fix applied
+# ============================================================================
+
+class PreApprovalResult(BaseModel):
+    """Combined Review + QA approval result returned before scan verification."""
+    review_verdict: ReviewVerdict
+    qa_result: Optional[QAResult] = None
+    approved: bool = Field(
+        description="True only if both Review and QA approved the fix",
+    )
+    rejection_reason: Optional[str] = Field(
+        default=None,
+        description="Why the fix was rejected (from Review or QA)",
+    )
+
+
+class V2FindingResult(BaseModel):
+    """Complete pipeline result for a single finding in the v2 pipeline."""
+    vulnerability: Vulnerability
+    triage: TriageDecision
+    remediation: Optional[RemediationAttempt] = None
+    pre_approval: Optional[PreApprovalResult] = None
+    final_status: str  # "success" | "failed" | "discarded" | "requires_human_review"
+    total_duration: float = 0.0
+    timestamp: str = ""
+
+
+class V2AggregatedReport(BaseModel):
+    """Final output from the v2 pipeline."""
+    findings_processed: int
+    findings_remediated: int
+    findings_failed: int
+    findings_discarded: int
+    results: List[V2FindingResult] = Field(default_factory=list)
     success_rate: float
     total_duration: float = 0.0
     stage_statistics: Dict[str, Any] = Field(default_factory=dict)
