@@ -110,6 +110,13 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
     
     # Build a map of rule definitions for additional context
     benchmark = root.find('.//xccdf:Benchmark', NAMESPACES)
+    
+    # If the root element IS the Benchmark (non-ARF XCCDF format), use root directly
+    if benchmark is None:
+        root_tag = root.tag.split('}')[-1] if '}' in root.tag else root.tag
+        if root_tag == 'Benchmark':
+            benchmark = root
+    
     rule_definitions = {}
     
     if benchmark is not None:
@@ -118,10 +125,18 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
             title_elem = rule.find('xccdf:title', NAMESPACES)
             desc_elem = rule.find('xccdf:description', NAMESPACES)
             
+            # Extract fix script and fixtext from Rule definition
+            fix_elem = rule.find('xccdf:fix', NAMESPACES)
+            fixtext_elem = rule.find('xccdf:fixtext', NAMESPACES)
+            fix_text = extract_text(fix_elem) if fix_elem is not None else ""
+            fixtext_text = extract_text(fixtext_elem) if fixtext_elem is not None else ""
+            
             rule_definitions[rule_id] = {
                 'title': extract_text(title_elem) if title_elem is not None else rule_id,
                 'description': extract_text(desc_elem) if desc_elem is not None else "",
-                'severity': extract_severity(rule)
+                'severity': extract_severity(rule),
+                'fix': fix_text,
+                'fixtext': fixtext_text,
             }
     
     # Process each rule result
@@ -148,12 +163,21 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
         # Build recommendation
         recommendation = f"Review and remediate: {title}"
         
-        # Check for fix text
+        # Check for fix text in rule-result first
         fix = rule_result.find('xccdf:fix', NAMESPACES)
         if fix is not None:
             fix_text = extract_text(fix)
             if fix_text:
                 recommendation = f"Remediation: {fix_text}"
+        else:
+            # Fall back to fix/fixtext from the Rule definition
+            def_fixtext = rule_info.get('fixtext', '')
+            def_fix = rule_info.get('fix', '')
+            if def_fixtext:
+                recommendation = f"Remediation: {def_fixtext}"
+            elif def_fix:
+                # Truncate long bash scripts to the most useful portion
+                recommendation = f"Remediation script: {def_fix[:800]}"
         
         vuln = {
             "id": f"openscap_{counter:03d}",
@@ -178,7 +202,13 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
     print(f"Parsed {len(findings)} failed/error findings → {output_json}")
     print(f"Total rules checked: {len(rule_results)}")
     
-    return findings
+    # Return findings along with scan statistics
+    return {
+        "findings": findings,
+        "total_rules_scanned": len(rule_results),
+        "rules_passed": len(rule_results) - len(findings),
+        "rules_failed": len(findings),
+    }
 
 
 def main():

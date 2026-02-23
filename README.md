@@ -1,25 +1,25 @@
-## Adaptive OpenSCAP QA Agent
+## Multi-Agent OpenSCAP Security Compliance System
 
-This repository’s primary entrypoint is an adaptive OpenSCAP-based QA agent that connects to a Rocky Linux target over SSH, runs compliance scans, and uses an LLM (via an OpenAI-compatible API such as OpenRouter) to iteratively remediate and verify vulnerabilities.
+This repository implements a multi-agent architecture for automated security compliance scanning and remediation on Rocky Linux systems using OpenSCAP and LLM-driven agents.
 
-The main script is:
+The main entry point is:
 
-- `qa_agent_adaptive.py` — adaptive, per-vulnerability remediation loop
+- `main_multiagent.py` — Multi-agent pipeline orchestrator (Triage → Remedy → Review → QA)
 
-Older Nessus-based and QA-loop flows are preserved in `legacy_files/` for reference.
+Legacy single-agent implementations are preserved in `legacy_code/` for reference.
 
-## What the adaptive agent does
+## What the multi-agent system does
 
 - **Scan**: Uses `openscap_cli.OpenSCAPScanner` to run an OpenSCAP XCCDF evaluation on the remote host.
 - **Parse**: Converts the resulting XML/ARF into a normalized JSON list of failed/error rules via `parse_openscap.py`.
-- **Adapt & remediate**: For each vulnerability:
-  - Builds a rich prompt with rule details and prior attempts.
-  - Lets an LLM propose concrete shell commands (executed via SSH, one at a time).
-  - Verifies the effect by re-running a focused OpenSCAP scan.
-  - Retries with feedback up to `--max-attempts` times.
-- **Report & playbook**: Writes a detailed text/PDF report plus a final Ansible playbook containing only _proven-working_ remediation commands.
+- **Multi-agent pipeline**: For each vulnerability:
+  1. **Triage Agent**: Decides if the vulnerability should be remediated and assesses risk
+  2. **Remedy Agent**: Proposes and executes remediation commands using LLM guidance
+  3. **Review Agent**: Validates the quality and safety of the remediation approach
+  4. **QA Agent**: Performs system-wide safety validation and regression testing
+- **Report & playbook**: Writes detailed reports and generates a final Ansible playbook containing only _proven-working_ remediation commands.
 
-All working files for the adaptive runs go under the directory passed via `--work-dir` (default `adaptive_qa_work/`).
+All working files go under the `reports/` directory and pipeline work is stored in `pipeline_work/`.
 
 ## Prerequisites
 
@@ -84,30 +84,27 @@ pip install -r requirements.txt
          ansible_become_password: YOUR_SUDO_PASSWORD
    ```
 
-4. **Run the adaptive agent against your host**
+4. **Run the multi-agent pipeline against your host**
 
    From the repo root (adjust flags as needed):
 
    ```bash
-   python -B qa_agent_adaptive.py \
+   python main_multiagent.py \
+     --inventory inventory.yml \
      --host 192.168.124.130 \
      --user llmagent1 \
      --sudo-password "<sudo_password>" \
-     --inventory inventory.yml \
+     --key /path/to/your/ssh/key \
      --profile xccdf_org.ssgproject.content_profile_cis \
      --datastream /usr/share/xml/scap/ssg/content/ssg-rl10-ds.xml \
-     --work-dir adaptive_qa_work \
      --max-vulns 25 \
      --min-severity 2 \
-     --max-attempts 3 \
-     --key C:\Users\coope\.ssh\rocky_vm \
-     --randomize \
-     --non-interactive
+     --workers 4
    ```
 
 5. **Review results and playbooks**
 
-   After the run completes, inspect `adaptive_qa_work/` for the reports and generated Ansible playbook (see “Outputs” below).
+   After the run completes, inspect `reports/` and `pipeline_work/` for the aggregated results, reports, and generated Ansible playbooks (see "Outputs" below).
 
 ## Inventory and SSH configuration
 
@@ -134,71 +131,82 @@ all:
 
 Recommended workflow is to keep a generic `inventory.yml.template` (no real passwords) in git and create a local `inventory.yml` by copying and filling in environment-specific values. Adapt `inventory.yml` to your environment (IP/hostname, SSH key path, and sudo behaviour), and avoid committing real passwords to version control.
 
-## Running the adaptive agent
+## Running the multi-agent pipeline
 
-From the repository root, a typical non-interactive run looks like:
+From the repository root, a typical run looks like:
 
 ```bash
-python -B qa_agent_adaptive.py \
+python main_multiagent.py \
+  --inventory inventory.yml \
   --host 192.168.124.130 \
   --user llmagent1 \
   --sudo-password "<sudo_password>" \
-  --inventory inventory.yml \
+  --key /path/to/ssh/key \
   --profile xccdf_org.ssgproject.content_profile_cis \
   --datastream /usr/share/xml/scap/ssg/content/ssg-rl10-ds.xml \
-  --work-dir adaptive_qa_work \
   --max-vulns 25 \
   --min-severity 2 \
-  --max-attempts 3 \
-  --key C:\Users\coope\.ssh\rocky_vm \
-  --randomize \
-  --non-interactive
+  --workers 4
 ```
 
 Key flags:
 
+- **`--inventory`**: Ansible inventory file describing target hosts.
 - **`--host` / `--user` / `--key` / `--sudo-password`**: SSH connectivity to the Rocky host.
 - **`--profile` / `--datastream`**: Which OpenSCAP content/profile to run (CIS Rocky 10 by default).
-- **`--work-dir`**: Where all XML/JSON logs, per-vulnerability attempts, transcripts, and final reports/playbooks are written.
 - **`--max-vulns` / `--min-severity`**: Control which and how many findings are processed.
-- **`--max-attempts`**: Max remediation attempts per vulnerability.
-- **`--randomize`**: Shuffle vulnerability order.
-- **`--non-interactive`**: Process all selected vulnerabilities without prompting between them.
+- **`--workers`**: Number of concurrent workers for parallel processing (default: 2).
+- **`--triage-mode`**: Triage mode - "auto" (skip low-risk) or "smart" (LLM-based decision).
+- **`--skip-scan`**: Skip initial scan and use existing parsed results.
 
 ## Outputs
 
-In `adaptive_qa_work/` (or your chosen `--work-dir`), you will typically see:
+In `reports/` and `pipeline_work/`, you will typically see:
 
-- `adaptive_results.json` — machine-readable summary of all attempts and outcomes.
-- `adaptive_report.txt` and `adaptive_report.pdf` — human-readable reports.
-- `final_remediation_playbook_*.yml` — Ansible playbook with only successful remediation commands.
-- `final_playbook_summary_*.txt` — summary listing vulnerabilities and commands included in the playbook.
-- Per-vulnerability artifacts (e.g. `fix_openscap_001_attempt1.*`, `verify_<rule>.xml/json`, LLM transcripts).
+**Main Reports:**
+- `reports/aggregated_results.json` — Complete pipeline results for all findings
+- `reports/pipeline_report.txt` and `reports/pipeline_report.pdf` — Executive summary
+- `reports/final_remediation_playbook_*.yml` — Ansible playbook with validated remediation commands
+- Agent-specific reports: `triage_report.pdf`, `remedy_report.pdf`, `review_report.pdf`, `qa_report.pdf`
+
+**Working Files:**
+- `pipeline_work/agent_reports/` — Individual agent outputs and decisions
+- `pipeline_work/scans/` — OpenSCAP scan results and verification data
+- `pipeline_work/remedy/` — LLM conversation transcripts and command logs
 
 These files are considered **generated artifacts** and are ignored by git.
 
 ## Repository layout (main files)
 
-- **`qa_agent_adaptive.py`**: Primary entrypoint; orchestrates OpenSCAP scans, parses results, drives the LLM remediation loop, verifies fixes, and writes reports/playbooks under `--work-dir`.
-- **`openscap_cli.py`**: SSH-based wrapper around the `oscap` CLI; provides the `OpenSCAPScanner` used by the adaptive agent (and some legacy tools) to run scans and download XML results.
-- **`parse_openscap.py`**: Parser that converts OpenSCAP XML/ARF results into a JSON list of failed/error rules compatible with the `Vulnerability` schema.
-- **`schemas.py`**: Pydantic models shared across the project, including `Vulnerability`, `RemediationSuggestion`, `RunCommandResult`, `ToolVerdict`, and `BatchResult`.
-- **`qa_framework.py`**: Ansible playbook abstraction layer (`AnsibleTask`, `RemediationPlaybook`, plus a legacy `VulnerabilityRemediation` helper) used by `remediation_bridge.py` and indirectly by the adaptive agent when generating final playbooks.
-- **`remediation_bridge.py`**: Translates `RemediationSuggestion` objects into concrete Ansible tasks and composes them into a `RemediationPlaybook`; called by the adaptive agent to build the final “proven remediation” playbook.
-- **`mitm_proxy.py`**: Optional HTTP proxy for OpenAI-compatible APIs that logs prompts and model responses into `adaptive_qa_work/llm_mitm.txt` for auditing or debugging.
-- **`inventory.yml`**: Environment-specific Ansible inventory describing how to reach your Rocky host (IP, SSH user/key, sudo settings). Treat this as a local config file and avoid committing real secrets.
-- **`requirements.txt`**: Python dependencies for the adaptive agent and its supporting tooling.
-- **`setup.py`**: Basic packaging metadata that allows the project to be installed as a package (e.g. via `pip install -e .`).
-- **`test_qa_framework.py`**: Unit tests for the `qa_framework.py` abstractions (mainly relevant when extending or refactoring the playbook-generation logic).
-- **`verify_commit.sh`**: Developer helper script to check for common security and hygiene issues before committing (e.g. `.env` tracked in git, SSH keys, work directories, missing key files).
-- **`adaptive_qa_work/`**: Default working directory for `qa_agent_adaptive.py` where scan results, logs, reports, and generated playbooks are written (ignored by git).
+**Core Multi-Agent System:**
+- **`main_multiagent.py`**: Primary entrypoint; orchestrates the full multi-agent pipeline for security compliance remediation.
+- **`agents/`**: Multi-agent components - `triage_agent.py`, `remedy_agent.py`, `review_agent.py`, `qa_agent.py`, and `base_agent.py`.
+- **`workflow/`**: Pipeline orchestration - `pipeline.py` (single-finding workflow) and `concurrent_manager.py` (parallel processing).
+- **`aggregation/`**: Results processing - `result_aggregator.py` combines outputs from all agents into final reports.
+
+**Core Infrastructure:**
+- **`openscap_cli.py`**: SSH-based wrapper around the `oscap` CLI for running security scans.
+- **`parse_openscap.py`**: Parser that converts OpenSCAP XML/ARF results into JSON format.
+- **`schemas.py`**: Pydantic data models for all agent inputs/outputs and pipeline communication.
+- **`helpers/`**: Shared utilities - LLM interface, command execution, scanning, and report generation.
+
+**Configuration & Output:**
+- **`inventory.yml`**: Ansible inventory describing target hosts (IP, SSH credentials, sudo settings).
+- **`requirements.txt`**: Python dependencies for the multi-agent system.
+- **`reports/`**: Generated reports, playbooks, and aggregated results (ignored by git).
+- **`pipeline_work/`**: Working files from pipeline execution (ignored by git).
+
+**Legacy Code:**
+- **`legacy_code/`**: Older implementations including single-agent systems, tools, tests, and Nessus-based workflows.
 
 ## Legacy code
 
-Older, Nessus-based and QA-loop oriented workflows are preserved under `legacy_files/`:
+Older implementations are preserved under `legacy_code/`:
 
-- Nessus parsing and remediation pipeline (`agent.py`, `parse_nessus.py`, `run_pipeline.py`) — see `legacy_files/README_nessus.md`.
-- QA loop and interactive end-to-end scripts that combine OpenSCAP, the Nessus-style agent, and Ansible.
-- Example SSH setup and runner scripts under `legacy_files/tools/`.
+- **`single_agent/`**: Original adaptive single-agent implementations including `qa_agent_adaptive.py`, standalone triage runners, and DISA STIG tools.
+- **`nessus/`**: Original Nessus-based vulnerability scanning system (`agent.py`, `parse_nessus.py`, `run_pipeline.py`) — see `legacy_code/nessus/README_nessus.md`.
+- **`tools/`**: Utility scripts and sample data generation.
+- **`tests/`**: Unit tests for legacy components.
+- **`samples/`**: Example reports from older system runs.
 
-They are **not** required to run the adaptive OpenSCAP QA agent, but are kept for future reference and experimentation.
+These implementations are **not** required to run the current multi-agent system, but are kept for reference and potential future integration.
