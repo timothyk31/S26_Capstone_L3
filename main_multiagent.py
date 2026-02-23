@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-main_multiagent.py — Full multi-agent remediation pipeline.
+main_multiagent.py — Full multi-agent remediation pipeline (V2).
 
 Scans a target VM with OpenSCAP, then runs every finding through:
-  Triage → Remedy → Review → QA
+  Triage → Remedy (fix → Review+QA approval → scan)
+
+V2 flow: Remedy generates fix, Review+QA approve BEFORE the verification
+scan runs.  If both approve AND the scan passes, the finding succeeds.
 
 Produces:
   - Aggregated JSON results
   - Text report
-  - PDF report
   - Consolidated Ansible playbook (successful fixes only)
 
 Usage examples:
@@ -40,6 +42,7 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -49,20 +52,28 @@ from dotenv import find_dotenv, load_dotenv
 from pydantic import ValidationError
 from rich.console import Console
 from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+    TimeElapsedColumn,
+)
 from rich.table import Table
 
-from agents.qa_agent import QAAgent
+from agents.qa_agent_v2 import QAAgentV2
 from agents.remedy_agent import RemedyAgent
+from agents.remedy_agent_v2 import RemedyAgentV2
 from agents.review_agent import ReviewAgent
+from agents.review_agent_v2 import ReviewAgentV2
 from agents.triage_agent import TriageAgent
-from aggregation.result_aggregator import ResultAggregator
 from helpers.command_executor import ShellCommandExecutor
 from helpers.scanner import Scanner
 from openscap_cli import OpenSCAPScanner
 from parse_openscap import parse_openscap
-from schemas import FindingResult, Vulnerability
-from workflow.concurrent_manager import ConcurrentManager
-from workflow.pipeline import Pipeline
+from schemas import TriageDecision, V2FindingResult, Vulnerability
+from workflow.pipeline_v2 import PipelineV2
 
 load_dotenv(find_dotenv(), override=False)
 
@@ -181,14 +192,14 @@ def load_vulnerabilities(
 
 # ── Summary table ──────────────────────────────────────────────────────────
 
-def print_summary(results: List[FindingResult], elapsed: float) -> None:
+def print_summary(results: List[V2FindingResult], elapsed: float) -> None:
     """Print a Rich summary table of pipeline results."""
     success = [r for r in results if r.final_status == "success"]
     failed = [r for r in results if r.final_status == "failed"]
     discarded = [r for r in results if r.final_status == "discarded"]
     review = [r for r in results if r.final_status == "requires_human_review"]
 
-    table = Table(title="Pipeline Results", show_lines=True)
+    table = Table(title="Pipeline V2 Results", show_lines=True)
     table.add_column("Category", style="bold")
     table.add_column("Count", justify="right")
     table.add_column("%", justify="right")
@@ -252,8 +263,6 @@ def parse_args() -> argparse.Namespace:
                         help="Cap the number of vulnerabilities to process")
     pipe_g.add_argument("--max-remedy-attempts", type=int, default=3,
                         help="Max remedy retries per finding (default: 3)")
-    pipe_g.add_argument("--max-review-retries", type=int, default=1,
-                        help="Max review→remedy loops per finding (default: 1)")
 
     # ── Agents ───
     agent_g = p.add_argument_group("Agent options")
@@ -284,8 +293,8 @@ def main() -> int:
     t0 = time.time()
 
     console.print(Panel.fit(
-        "[bold cyan]Multi-Agent Remediation Pipeline[/bold cyan]\n"
-        "Triage → Remedy → Review → QA",
+        "[bold cyan]Multi-Agent Remediation Pipeline V2[/bold cyan]\n"
+        "Triage → Remedy (fix → Review+QA approval → scan)",
         border_style="cyan",
     ))
 
@@ -403,7 +412,7 @@ def main() -> int:
         work_dir=str(work_dir / "scans"),
     )
 
-    # ── Initialize agents ─────────────────────────────────────────────
+    # ── Initialize agents (V2) ───────────────────────────────────────
     triage_agent = TriageAgent(mode=args.triage_mode)
 
     remedy_agent = RemedyAgent(
@@ -416,42 +425,198 @@ def main() -> int:
         model=args.review_model,
     )
 
-    qa_agent = QAAgent(executor=executor)
+    qa_agent_v2 = QAAgentV2()
+
+    # V2 wrappers: Review wraps QA, Remedy wraps Review
+    review_agent_v2 = ReviewAgentV2(
+        review_agent=review_agent,
+        qa_agent=qa_agent_v2,
+    )
+
+    remedy_agent_v2 = RemedyAgentV2(
+        remedy_agent=remedy_agent,
+        review_agent_v2=review_agent_v2,
+    )
 
     # ── Pipeline factory ──────────────────────────────────────────────
     agent_report_dir = Path(args.work_dir) / "agent_reports"
 
-    def make_pipeline() -> Pipeline:
-        return Pipeline(
+    def make_pipeline() -> PipelineV2:
+        return PipelineV2(
             triage_agent=triage_agent,
-            remedy_agent=remedy_agent,
-            review_agent=review_agent,
-            qa_agent=qa_agent,
+            remedy_agent_v2=remedy_agent_v2,
             max_remedy_attempts=args.max_remedy_attempts,
-            max_review_retries=args.max_review_retries,
             report_dir=agent_report_dir,
         )
 
     # ── Run ───────────────────────────────────────────────────────────
-    manager = ConcurrentManager(
-        pipeline_factory=make_pipeline,
-        max_concurrent=args.workers,
+    results: List[V2FindingResult] = []
+    total = len(filtered)
+    console.print(
+        f"\n[bold cyan]── Running V2 pipeline for {total} finding(s) "
+        f"({args.workers} concurrent) ──[/bold cyan]\n"
     )
-    results = manager.run_all(filtered)
 
-    # ── Aggregate & report ────────────────────────────────────────────
-    aggregator = ResultAggregator(
-        output_dir=args.report_dir,
-        scan_profile=args.profile,
-        target_host=host or "unknown",
+    def _safe_run(pipeline: PipelineV2, vuln: Vulnerability) -> V2FindingResult:
+        try:
+            return pipeline.run(vuln)
+        except Exception as exc:
+            console.print(f"[red]Pipeline error for {vuln.id}: {exc}[/red]")
+            return V2FindingResult(
+                vulnerability=vuln,
+                triage=TriageDecision(
+                    finding_id=vuln.id,
+                    should_remediate=False,
+                    risk_level="medium",
+                    reason=f"Pipeline error: {exc}",
+                    requires_human_review=True,
+                ),
+                final_status="failed",
+                total_duration=0.0,
+                timestamp=datetime.now().isoformat(timespec="seconds"),
+            )
+
+    progress = Progress(
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        MofNCompleteColumn(),
+        TimeElapsedColumn(),
+        console=console,
     )
-    report = aggregator.aggregate(results)
 
-    # ── Per-agent PDF reports ─────────────────────────────────────────
+    if args.workers <= 1:
+        # Sequential
+        pipeline = make_pipeline()
+        with progress:
+            task = progress.add_task("Processing findings...", total=total)
+            for vuln in filtered:
+                result = _safe_run(pipeline, vuln)
+                results.append(result)
+                progress.advance(task)
+    else:
+        # Concurrent
+        order = {v.id: i for i, v in enumerate(filtered)}
+        with progress:
+            task = progress.add_task("Processing findings...", total=total)
+            with ThreadPoolExecutor(max_workers=args.workers) as pool:
+                future_map = {}
+                for vuln in filtered:
+                    p = make_pipeline()
+                    fut = pool.submit(_safe_run, p, vuln)
+                    future_map[fut] = vuln
+
+                for fut in as_completed(future_map):
+                    try:
+                        result = fut.result()
+                    except Exception as exc:
+                        vuln = future_map[fut]
+                        console.print(f"[red]Pipeline crashed for {vuln.id}: {exc}[/red]")
+                        result = V2FindingResult(
+                            vulnerability=vuln,
+                            triage=TriageDecision(
+                                finding_id=vuln.id,
+                                should_remediate=False,
+                                risk_level="medium",
+                                reason=f"Pipeline crash: {exc}",
+                                requires_human_review=True,
+                            ),
+                            final_status="failed",
+                            total_duration=0.0,
+                            timestamp=datetime.now().isoformat(timespec="seconds"),
+                        )
+                    results.append(result)
+                    progress.advance(task)
+
+        results.sort(key=lambda r: order.get(r.vulnerability.id, 999))
+
+    # ── Save results JSON ─────────────────────────────────────────────
     report_dir = Path(args.report_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
 
-    # Triage PDF
+    json_path = report_dir / "v2_aggregated_results.json"
+    json_path.write_text(
+        json.dumps(
+            [r.model_dump(mode="json") for r in results],
+            indent=2,
+            default=str,
+        ),
+        encoding="utf-8",
+    )
+    console.print(f"\n[green]Results JSON: {json_path}[/green]")
+
+    # ── Text report ───────────────────────────────────────────────────
+    text_lines: List[str] = []
+    ts = datetime.now().isoformat(timespec="seconds")
+    text_lines.append("Multi-Agent Pipeline V2 Report")
+    text_lines.append(f"Generated: {ts}")
+    text_lines.append(f"Target Host: {host or 'unknown'}")
+    text_lines.append(f"Scan Profile: {args.profile}")
+    text_lines.append("=" * 80)
+    text_lines.append("")
+
+    remediated_count = sum(1 for r in results if r.final_status == "success")
+    failed_count = sum(1 for r in results if r.final_status == "failed")
+    discarded_count = sum(1 for r in results if r.final_status == "discarded")
+    human_count = sum(1 for r in results if r.final_status == "requires_human_review")
+    rate = (remediated_count / len(results) * 100) if results else 0.0
+
+    text_lines.append(f"Findings processed:    {len(results)}")
+    text_lines.append(f"Remediated:            {remediated_count}")
+    text_lines.append(f"Failed:                {failed_count}")
+    text_lines.append(f"Discarded:             {discarded_count}")
+    text_lines.append(f"Requires human review: {human_count}")
+    text_lines.append(f"Success rate:          {rate:.1f}%")
+    text_lines.append("")
+    text_lines.append("=" * 80)
+
+    for i, r in enumerate(results, 1):
+        v = r.vulnerability
+        status_icon = {
+            "success": "[OK]", "failed": "[FAIL]",
+            "discarded": "[SKIP]", "requires_human_review": "[REVIEW]",
+        }.get(r.final_status, "[?]")
+        text_lines.append("")
+        text_lines.append(f"{i}. {status_icon} {v.id} - {v.title}")
+        text_lines.append(f"   Severity: {v.severity}  |  Host: {v.host}")
+        text_lines.append(f"   Triage: risk={r.triage.risk_level}, remediate={r.triage.should_remediate}")
+
+        if r.remediation:
+            rm = r.remediation
+            text_lines.append(
+                f"   Remedy: attempt #{rm.attempt_number}, scan_passed={rm.scan_passed}, "
+                f"cmds={len(rm.commands_executed)}, duration={rm.duration:.1f}s"
+            )
+            for cmd in rm.commands_executed:
+                text_lines.append(f"     - {cmd}")
+            if rm.error_summary:
+                text_lines.append(f"   Error: {rm.error_summary}")
+
+        if r.pre_approval:
+            pa = r.pre_approval
+            rv = pa.review_verdict
+            text_lines.append(
+                f"   Review: approve={rv.approve}, optimal={rv.is_optimal}, "
+                f"score={rv.security_score}"
+            )
+            if rv.feedback:
+                text_lines.append(f"   Feedback: {rv.feedback}")
+            if pa.qa_result:
+                qa = pa.qa_result
+                text_lines.append(
+                    f"   QA: safe={qa.safe}, recommendation={qa.recommendation}"
+                )
+            if not pa.approved and pa.rejection_reason:
+                text_lines.append(f"   Rejection: {pa.rejection_reason}")
+
+        text_lines.append(f"   Final: {r.final_status}  |  Duration: {r.total_duration:.1f}s")
+        text_lines.append("-" * 80)
+
+    text_report_path = report_dir / "v2_pipeline_report.txt"
+    text_report_path.write_text("\n".join(text_lines), encoding="utf-8")
+    console.print(f"[green]Text report: {text_report_path}[/green]")
+
+    # ── Triage PDF ────────────────────────────────────────────────────
     try:
         triage_decisions = [r.triage for r in results]
         triage_vulns = [r.vulnerability for r in results]
@@ -464,47 +629,6 @@ def main() -> int:
         console.print(f"[green]Triage PDF: {report_dir / 'triage_report.pdf'}[/green]")
     except Exception as exc:
         console.print(f"[yellow]Triage PDF skipped: {exc}[/yellow]")
-
-    # Remedy PDF
-    try:
-        remedy_agent.write_results_pdf(
-            results,
-            output_path=report_dir / "remedy_report.pdf",
-            target_host=host or "unknown",
-        )
-        console.print(f"[green]Remedy PDF: {report_dir / 'remedy_report.pdf'}[/green]")
-    except Exception as exc:
-        console.print(f"[yellow]Remedy PDF skipped: {exc}[/yellow]")
-
-    # Review PDF
-    try:
-        review_agent.write_results_pdf(
-            results,
-            output_path=report_dir / "review_report.pdf",
-            target_host=host or "unknown",
-        )
-        console.print(f"[green]Review PDF: {report_dir / 'review_report.pdf'}[/green]")
-    except Exception as exc:
-        console.print(f"[yellow]Review PDF skipped: {exc}[/yellow]")
-
-    # QA PDF
-    try:
-        qa_agent.write_results_pdf(
-            results,
-            output_path=report_dir / "qa_report.pdf",
-            target_host=host or "unknown",
-        )
-        console.print(f"[green]QA PDF: {report_dir / 'qa_report.pdf'}[/green]")
-    except Exception as exc:
-        console.print(f"[yellow]QA PDF skipped: {exc}[/yellow]")
-
-    console.print(f"\n[green]Reports saved to: {args.report_dir}/[/green]")
-    if report.ansible_playbook_path:
-        console.print(f"[green]Ansible playbook: {report.ansible_playbook_path}[/green]")
-    if report.text_report_path:
-        console.print(f"[green]Text report: {report.text_report_path}[/green]")
-    if report.pdf_report_path:
-        console.print(f"[green]PDF report: {report.pdf_report_path}[/green]")
 
     # ── Summary ───────────────────────────────────────────────────────
     elapsed = time.time() - t0
