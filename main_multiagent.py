@@ -283,6 +283,11 @@ def parse_args() -> argparse.Namespace:
     out.add_argument("--report-dir", default=DEFAULT_REPORT_DIR,
                      help="Output directory for reports and playbook")
 
+    # ── Braintrust ───
+    bt = p.add_argument_group("Braintrust")
+    bt.add_argument("--experiment-name", default=None,
+                    help="Braintrust experiment name (default: auto-generated from model names + timestamp)")
+
     return p.parse_args()
 
 
@@ -633,6 +638,27 @@ def main() -> int:
     # ── Summary ───────────────────────────────────────────────────────
     elapsed = time.time() - t0
     print_summary(results, elapsed)
+
+    # ── Braintrust experiment ─────────────────────────────────────────
+    try:
+        from braintrust_eval_writer import write_braintrust_eval
+
+        # Collect the actual model names from each agent for comparison
+        model_metadata = {
+            "triage": getattr(triage_agent, "model", "unknown"),
+            "remedy": getattr(remedy_agent, "model_name", "unknown"),
+            "review": getattr(review_agent, "model", "unknown"),
+            "qa":     getattr(qa_agent_v2, "model", "unknown"),
+        }
+
+        write_braintrust_eval(
+            report_dir=str(report_dir),
+            results=results,
+            experiment_name=args.experiment_name,
+            model_metadata=model_metadata,
+        )
+    except Exception as exc:
+        console.print(f"[yellow]Braintrust eval skipped: {exc}[/yellow]")
 
     return 0
 

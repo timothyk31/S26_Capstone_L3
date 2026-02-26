@@ -184,10 +184,16 @@ class PipelineV2:
             f"({elapsed:.1f}s)[/bold]"
         )
 
+        # Build the complete list of all attempts (previous failures + final)
+        all_attempts = list(previous_attempts)
+        if remediation is not None and remediation not in previous_attempts:
+            all_attempts.append(remediation)
+
         return V2FindingResult(
             vulnerability=vulnerability,
             triage=triage_decision,
             remediation=remediation,
+            all_attempts=all_attempts,
             pre_approval=approval,
             final_status=final_status,
             total_duration=elapsed,
