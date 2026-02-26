@@ -189,6 +189,10 @@ def write_braintrust_eval(
         all_attempts = _extract_all_attempts(r)
         attempts_count = len(all_attempts)
 
+        # LLM metrics (from the per-finding tracker)
+        llm = getattr(r, "llm_metrics", None) or {}
+        per_agent = llm.get("per_agent", {})
+
         experiment.log(
             input=r.vulnerability.id,
             output={
@@ -198,6 +202,31 @@ def write_braintrust_eval(
                 "qa_detail": qa,
                 "all_remedy_attempts": all_attempts,
                 "final_status": r.final_status,
+                # LLM metrics — top-level output columns
+                "llm_calls": llm.get("llm_calls", 0),
+                "llm_errors": llm.get("llm_errors", 0),
+                "llm_duration_s": llm.get("llm_duration_s", 0.0),
+                "prompt_tokens": llm.get("prompt_tokens", 0),
+                "completion_tokens": llm.get("completion_tokens", 0),
+                "total_tokens": llm.get("total_tokens", 0),
+                "estimated_cost_usd": llm.get("estimated_cost_usd", 0.0),
+                # Per-agent breakdowns
+                "triage_llm_calls": per_agent.get("triage", {}).get("llm_calls", 0),
+                "triage_tokens": per_agent.get("triage", {}).get("total_tokens", 0),
+                "triage_cost_usd": per_agent.get("triage", {}).get("estimated_cost_usd", 0.0),
+                "triage_duration_s": per_agent.get("triage", {}).get("wall_time_s", 0.0),
+                "remedy_llm_calls": per_agent.get("remedy", {}).get("llm_calls", 0),
+                "remedy_tokens": per_agent.get("remedy", {}).get("total_tokens", 0),
+                "remedy_cost_usd": per_agent.get("remedy", {}).get("estimated_cost_usd", 0.0),
+                "remedy_duration_s": per_agent.get("remedy", {}).get("wall_time_s", 0.0),
+                "review_llm_calls": per_agent.get("review", {}).get("llm_calls", 0),
+                "review_tokens": per_agent.get("review", {}).get("total_tokens", 0),
+                "review_cost_usd": per_agent.get("review", {}).get("estimated_cost_usd", 0.0),
+                "review_duration_s": per_agent.get("review", {}).get("wall_time_s", 0.0),
+                "qa_llm_calls": per_agent.get("qa", {}).get("llm_calls", 0),
+                "qa_tokens": per_agent.get("qa", {}).get("total_tokens", 0),
+                "qa_cost_usd": per_agent.get("qa", {}).get("estimated_cost_usd", 0.0),
+                "qa_duration_s": per_agent.get("qa", {}).get("wall_time_s", 0.0),
             },
             scores={
                 "remediated": score,

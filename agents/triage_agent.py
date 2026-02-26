@@ -67,14 +67,13 @@ class _LLMVerdict(BaseModel):
 class ModelSpec:
     name: str
     temperature: float = 0.0
-    max_tokens: int = 600
 
 
 MODELS_BY_MODE: Dict[str, ModelSpec] = {
-    "fast":          ModelSpec(name="meta-llama/llama-3.1-8b-instruct",  temperature=0.0, max_tokens=450),
-    "balanced":      ModelSpec(name="anthropic/claude-3.5-sonnet",       temperature=0.0, max_tokens=650),
-    "smart":         ModelSpec(name="openai/gpt-4o",                     temperature=0.0, max_tokens=750),
-    "nemotron_free": ModelSpec(name="nvidia/nemotron-4-mini-instruct",   temperature=0.1, max_tokens=500),
+    "fast":          ModelSpec(name="meta-llama/llama-3.1-8b-instruct",  temperature=0.0),
+    "balanced":      ModelSpec(name="anthropic/claude-3.5-sonnet",       temperature=0.0),
+    "smart":         ModelSpec(name="openai/gpt-4o",                     temperature=0.0),
+    "nemotron_free": ModelSpec(name="nvidia/nemotron-4-mini-instruct",   temperature=0.1),
 }
 
 
@@ -88,14 +87,14 @@ class _OpenRouterClient:
         base_url: str = "https://openrouter.ai/api/v1",
         timeout: int = 60,
         temperature: float = 0.0,
-        max_tokens: int = 600,
+        metrics_tracker=None,
     ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.temperature = temperature
-        self.max_tokens = max_tokens
+        self.metrics_tracker = metrics_tracker
         self.endpoint = f"{self.base_url}/chat/completions"
         self.headers: Dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
@@ -112,7 +111,6 @@ class _OpenRouterClient:
         payload = {
             "model": self.model,
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
             "provider": {"allow_fallbacks": True},
             "response_format": {"type": "json_object"},
             "messages": [
@@ -131,6 +129,9 @@ class _OpenRouterClient:
 
         last_err: Optional[str] = None
         for attempt in range(1, 4):
+            start_time = None
+            if self.metrics_tracker is not None:
+                start_time = self.metrics_tracker.start_call()
             try:
                 r = requests.post(
                     self.endpoint,
@@ -140,12 +141,18 @@ class _OpenRouterClient:
                 )
                 if r.status_code in (429, 500, 502, 503, 504):
                     last_err = f"Transient OpenRouter error {r.status_code}: {r.text}"
+                    if self.metrics_tracker is not None:
+                        self.metrics_tracker.record_call(None, agent="triage", model=self.model, start_time=start_time, error=True, error_message=last_err)
                     time.sleep(0.5 * attempt)
                     continue
                 if r.status_code >= 400:
+                    if self.metrics_tracker is not None:
+                        self.metrics_tracker.record_call(None, agent="triage", model=self.model, start_time=start_time, error=True, error_message=f"HTTP {r.status_code}")
                     raise RuntimeError(f"OpenRouter API error {r.status_code}: {r.text}")
 
                 data = r.json()
+                if self.metrics_tracker is not None:
+                    self.metrics_tracker.record_call(data, agent="triage", model=self.model, start_time=start_time)
                 content = (
                     data.get("choices", [{}])[0]
                     .get("message", {})
@@ -158,6 +165,8 @@ class _OpenRouterClient:
 
             except requests.RequestException as e:
                 last_err = f"RequestException: {e}"
+                if self.metrics_tracker is not None and start_time is not None:
+                    self.metrics_tracker.record_call(None, agent="triage", model=self.model, start_time=start_time, error=True, error_message=str(e))
                 time.sleep(0.5 * attempt)
 
         raise RuntimeError(f"OpenRouter classify failed after retries. Last error: {last_err}")
@@ -353,6 +362,7 @@ class TriageAgent(BaseAgent):
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: int = 60,
+        metrics_tracker=None,
     ):
         api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not api_key:
@@ -364,13 +374,14 @@ class TriageAgent(BaseAgent):
         spec = MODELS_BY_MODE.get(mode, MODELS_BY_MODE["balanced"])
         chosen_model = model_override or os.getenv("OPENROUTER_MODEL") or spec.name
 
+        self.metrics_tracker = metrics_tracker
         self._client = _OpenRouterClient(
             api_key=api_key,
             model=chosen_model,
             base_url=base_url or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             timeout=timeout,
             temperature=spec.temperature,
-            max_tokens=spec.max_tokens,
+            metrics_tracker=metrics_tracker,
         )
         self._fallback_models: List[str] = fallback_models or []
 

@@ -207,6 +207,10 @@ class V2FindingResult(BaseModel):
     final_status: str  # "success" | "failed" | "discarded" | "requires_human_review"
     total_duration: float = 0.0
     timestamp: str = ""
+    llm_metrics: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Aggregated LLM call metrics (calls, tokens, cost, duration) from the metrics tracker.",
+    )
 
 
 class V2AggregatedReport(BaseModel):

@@ -635,6 +635,27 @@ def main() -> int:
     except Exception as exc:
         console.print(f"[yellow]Triage PDF skipped: {exc}[/yellow]")
 
+    # ── Pipeline PDF (full summary) ───────────────────────────────────
+    try:
+        from pipeline_pdf_writer import write_pipeline_pdf
+
+        pipeline_model_meta = {
+            "triage": getattr(triage_agent, "model", "unknown"),
+            "remedy": getattr(remedy_agent, "model_name", "unknown"),
+            "review": getattr(review_agent, "model", "unknown"),
+            "qa":     getattr(qa_agent_v2, "model", "unknown"),
+        }
+
+        write_pipeline_pdf(
+            results,
+            output_path=report_dir / "pipeline_report.pdf",
+            target_host=host or "unknown",
+            model_metadata=pipeline_model_meta,
+        )
+        console.print(f"[green]Pipeline PDF: {report_dir / 'pipeline_report.pdf'}[/green]")
+    except Exception as exc:
+        console.print(f"[yellow]Pipeline PDF skipped: {exc}[/yellow]")
+
     # ── Summary ───────────────────────────────────────────────────────
     elapsed = time.time() - t0
     print_summary(results, elapsed)

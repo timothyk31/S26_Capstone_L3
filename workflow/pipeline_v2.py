@@ -24,6 +24,7 @@ from rich.console import Console
 from agents.triage_agent import TriageAgent
 from agents.remedy_agent_v2 import RemedyAgentV2
 from helpers.agent_report_writer import AgentReportWriter
+from helpers.llm_metrics import LLMMetricsTracker
 from schemas import (
     PreApprovalResult,
     RemedyInput,
@@ -61,10 +62,31 @@ class PipelineV2:
             AgentReportWriter(report_dir) if report_dir else None
         )
 
+    def _set_metrics_tracker(self, tracker: LLMMetricsTracker) -> None:
+        """Propagate a metrics tracker to all nested agents."""
+        # Triage
+        self.triage.metrics_tracker = tracker
+        if hasattr(self.triage, "_client"):
+            self.triage._client.metrics_tracker = tracker
+        # Remedy (the inner RemedyAgent)
+        if hasattr(self.remedy_v2, "remedy_agent"):
+            self.remedy_v2.remedy_agent.metrics_tracker = tracker
+        # Review + QA (inside ReviewAgentV2 inside RemedyAgentV2)
+        if hasattr(self.remedy_v2, "review_v2"):
+            rv2 = self.remedy_v2.review_v2
+            if hasattr(rv2, "review_agent"):
+                rv2.review_agent.metrics_tracker = tracker
+            if hasattr(rv2, "qa_agent"):
+                rv2.qa_agent.metrics_tracker = tracker
+
     def run(self, vulnerability: Vulnerability) -> V2FindingResult:
         """Run a single vulnerability through the v2 pipeline."""
         t0 = time.time()
         vid = vulnerability.id
+
+        # Create a fresh metrics tracker for this finding
+        tracker = LLMMetricsTracker()
+        self._set_metrics_tracker(tracker)
 
         # ── Stage 1: Triage ───────────────────────────────────────────
         console.print(f"[bold cyan]  [{vid}] Stage 1/2: Triage[/bold cyan]")
@@ -98,6 +120,7 @@ class PipelineV2:
                 final_status=status,
                 total_duration=time.time() - t0,
                 timestamp=datetime.now().isoformat(timespec="seconds"),
+                llm_metrics=tracker.summary(),
             )
 
         console.print(
@@ -198,4 +221,5 @@ class PipelineV2:
             final_status=final_status,
             total_duration=elapsed,
             timestamp=datetime.now().isoformat(timespec="seconds"),
+            llm_metrics=tracker.summary(),
         )
