@@ -89,6 +89,7 @@ class _OpenRouterClient:
         timeout: int = 60,
         temperature: float = 0.0,
         max_tokens: int = 600,
+        system_prompt: Optional[str] = None,
     ):
         self.api_key = api_key
         self.model = model
@@ -97,6 +98,12 @@ class _OpenRouterClient:
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.endpoint = f"{self.base_url}/chat/completions"
+        self.system_prompt = system_prompt or (
+            "You are a security triage assistant for Rocky/RHEL 9 OpenSCAP STIG findings.\n"
+            "Return ONLY a single JSON object that matches the schema exactly.\n"
+            "No prose. No markdown. No code fences. No extra keys.\n"
+            "Be conservative: if uncertain, choose requires_human_review.\n"
+        )
         self.headers: Dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -118,12 +125,7 @@ class _OpenRouterClient:
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a security triage assistant for Rocky/RHEL 9 OpenSCAP STIG findings.\n"
-                        "Return ONLY a single JSON object that matches the schema exactly.\n"
-                        "No prose. No markdown. No code fences. No extra keys.\n"
-                        "Be conservative: if uncertain, choose requires_human_review.\n"
-                    ),
+                    "content": self.system_prompt,
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -185,8 +187,8 @@ def _vuln_text_blob(v: Vulnerability) -> str:
     ).lower()
 
 
-def _build_prompt(v: Vulnerability) -> str:
-    return (
+def _build_prompt(v: Vulnerability, *, lenient: bool = False) -> str:
+    schema_block = (
         "Classify this OpenSCAP finding into exactly one category:\n"
         "safe_to_remediate, requires_human_review, too_dangerous_to_remediate.\n\n"
         "Return ONLY JSON for this schema:\n"
@@ -210,16 +212,34 @@ def _build_prompt(v: Vulnerability) -> str:
         f"- title: {v.title}\n"
         f"- description: {(v.description or '')[:900]}\n"
         f"- recommendation: {(v.recommendation or '')[:900]}\n\n"
-        "Policy:\n"
-        "- Be conservative. If unclear, choose requires_human_review.\n"
-        "- Mark too_dangerous_to_remediate for partitioning/filesystem/bootloader/FIPS changes.\n"
-        "- Mark requires_human_review for auth/ssh/sudo/pam changes that could lock out access, "
-        "EXCEPT password-related rules.\n"
-        "- Mark safe_to_remediate for password policy/complexity/expiration/history rules "
-        "(pwquality, chage, password length, password age, password complexity, lockout, etc.).\n"
-        "- Mark safe_to_remediate for low-risk package installs, service enablement, "
-        "sysctl persistence that is unlikely to lock out access.\n"
     )
+
+    if lenient:
+        policy = (
+            "Policy:\n"
+            "- Prefer safe_to_remediate whenever the fix is unlikely to cause lockout or system breakage.\n"
+            "- Only use requires_human_review when there is a clear, specific risk of losing "
+            "SSH/console access or breaking a critical service.\n"
+            "- Mark too_dangerous_to_remediate ONLY for partitioning/filesystem/bootloader/FIPS changes.\n"
+            "- Mark safe_to_remediate for auth/ssh/sudo/pam changes that follow standard STIG "
+            "hardening patterns, including password policy, SSH ciphers, session timeouts, and similar.\n"
+            "- Mark safe_to_remediate for package installs, service enablement, "
+            "sysctl persistence, audit rules, and file permissions.\n"
+        )
+    else:
+        policy = (
+            "Policy:\n"
+            "- Be conservative. If unclear, choose requires_human_review.\n"
+            "- Mark too_dangerous_to_remediate for partitioning/filesystem/bootloader/FIPS changes.\n"
+            "- Mark requires_human_review for auth/ssh/sudo/pam changes that could lock out access, "
+            "EXCEPT password-related rules.\n"
+            "- Mark safe_to_remediate for password policy/complexity/expiration/history rules "
+            "(pwquality, chage, password length, password age, password complexity, lockout, etc.).\n"
+            "- Mark safe_to_remediate for low-risk package installs, service enablement, "
+            "sysctl persistence that is unlikely to lock out access.\n"
+        )
+
+    return schema_block + policy
 
 
 def _verdict_to_decision(v: _LLMVerdict) -> TriageDecision:
@@ -348,6 +368,7 @@ class TriageAgent(BaseAgent):
         self,
         *,
         mode: str = "balanced",
+        lenient: bool = False,
         model_override: Optional[str] = None,
         fallback_models: Optional[List[str]] = None,
         api_key: Optional[str] = None,
@@ -361,8 +382,20 @@ class TriageAgent(BaseAgent):
                 "Provide it as an argument or set it in .env / environment."
             )
 
+        self._lenient = lenient
+
         spec = MODELS_BY_MODE.get(mode, MODELS_BY_MODE["balanced"])
         chosen_model = model_override or os.getenv("OPENROUTER_MODEL") or spec.name
+
+        system_prompt = None
+        if lenient:
+            system_prompt = (
+                "You are a security triage assistant for Rocky/RHEL 9 OpenSCAP STIG findings.\n"
+                "Return ONLY a single JSON object that matches the schema exactly.\n"
+                "No prose. No markdown. No code fences. No extra keys.\n"
+                "Prefer safe_to_remediate when possible. Only use requires_human_review "
+                "for changes that have a genuine risk of locking out access or breaking the system.\n"
+            )
 
         self._client = _OpenRouterClient(
             api_key=api_key,
@@ -371,6 +404,7 @@ class TriageAgent(BaseAgent):
             timeout=timeout,
             temperature=spec.temperature,
             max_tokens=spec.max_tokens,
+            system_prompt=system_prompt,
         )
         self._fallback_models: List[str] = fallback_models or []
 
@@ -440,7 +474,7 @@ class TriageAgent(BaseAgent):
     # ------------------------------------------------------------------
     def _classify_with_llm(self, vuln: Vulnerability) -> _LLMVerdict:
         """Call OpenRouter (with fallback models) and parse the response."""
-        prompt = _build_prompt(vuln)
+        prompt = _build_prompt(vuln, lenient=self._lenient)
         candidates = [self._client.model] + [
             m for m in self._fallback_models if m != self._client.model
         ]

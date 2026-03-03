@@ -28,6 +28,7 @@ from schemas import (
     PreApprovalResult,
     RemedyInput,
     RemediationAttempt,
+    ReviewVerdict,
     TriageDecision,
     TriageInput,
     V2FindingResult,
@@ -110,6 +111,7 @@ class PipelineV2:
         approval: Optional[PreApprovalResult] = None
         attempt = 1
         previous_attempts: List[RemediationAttempt] = []
+        previous_verdicts: List[ReviewVerdict] = []
         review_feedback: Optional[str] = None
 
         while attempt <= self.max_remedy_attempts:
@@ -124,6 +126,7 @@ class PipelineV2:
                 attempt_number=attempt,
                 previous_attempts=previous_attempts,
                 review_feedback=review_feedback,
+                previous_review_verdicts=previous_verdicts,
             )
 
             remediation, approval = self.remedy_v2.process(remedy_input)
@@ -150,6 +153,8 @@ class PipelineV2:
 
             # ── Failure: prepare for retry ───────────────────────────
             previous_attempts.append(remediation)
+            if approval is not None:
+                previous_verdicts.append(approval.review_verdict)
 
             # Build feedback for the next attempt
             if approval is not None and not approval.approved:

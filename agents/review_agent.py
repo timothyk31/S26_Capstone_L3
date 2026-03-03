@@ -83,6 +83,20 @@ def _build_review_prompt(input_data: ReviewInput) -> str:
         lines.append("- Execution details (last few):")
         for d in attempt.execution_details[-3:]:
             lines.append(f"  - {d.command} -> exit_code={d.exit_code}, success={d.success}")
+    # Previous review verdicts (if this is a retry)
+    if input_data.previous_verdicts:
+        lines.extend(["", "## Previous Review History"])
+        for i, pv in enumerate(input_data.previous_verdicts, 1):
+            lines.append(f"- Review #{i}: approve={pv.approve}, score={pv.security_score}")
+            if pv.concerns:
+                lines.append(f"  Concerns raised: {'; '.join(pv.concerns[:5])}")
+            if pv.suggested_improvements:
+                lines.append(f"  Improvements requested: {'; '.join(pv.suggested_improvements[:5])}")
+            if pv.feedback:
+                lines.append(f"  Feedback: {pv.feedback[:200]}")
+        lines.append("")
+        lines.append("Check whether the current fix addresses the issues raised in previous reviews.")
+
     lines.extend([
         "",
         "Respond with a single JSON object (no markdown, no extra text) with these exact keys:",
@@ -118,6 +132,7 @@ def _call_llm(
     }
     payload = {
         "model": model,
+        "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},

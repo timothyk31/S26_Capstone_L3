@@ -91,6 +91,7 @@ class RemedyAgentV2:
             vulnerability=vuln,
             remediation_attempt=attempt,
             triage_decision=input_data.triage_decision,
+            previous_verdicts=input_data.previous_review_verdicts,
         )
         approval = self.review_v2.process(review_input)
 

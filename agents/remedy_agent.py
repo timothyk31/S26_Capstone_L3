@@ -55,7 +55,7 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
-from schemas import Vulnerability, RemedyInput, RemediationAttempt, FindingResult, ToolVerdict, RunCommandResult
+from schemas import Vulnerability, RemedyInput, RemediationAttempt, FindingResult, ReviewVerdict, ToolVerdict, RunCommandResult
 from helpers.command_executor import ShellCommandExecutor
 from helpers.utils import normalize_command
 
@@ -136,6 +136,7 @@ class RemedyAgent:
             triage_reason=input_data.triage_decision.reason,
             previous_attempts=input_data.previous_attempts,
             review_feedback=input_data.review_feedback,
+            previous_review_verdicts=input_data.previous_review_verdicts,
         )
 
         session_label = f"{vuln.id}_attempt{input_data.attempt_number}"
@@ -179,6 +180,7 @@ class RemedyAgent:
         triage_reason: str,
         previous_attempts: List[RemediationAttempt],
         review_feedback: Optional[str],
+        previous_review_verdicts: Optional[List[ReviewVerdict]] = None,
     ) -> str:
         rule_id = vuln.oval_id or vuln.rule or vuln.title
         rule_name = rule_id.replace("xccdf_org.ssgproject.content_rule_", "")
@@ -215,6 +217,17 @@ class RemedyAgent:
 
         if review_feedback:
             lines.extend(["", "REVIEW FEEDBACK (apply improvements):", review_feedback.strip()[:600]])
+
+        if previous_review_verdicts:
+            lines.extend(["", "STRUCTURED REVIEW HISTORY (address these specific issues):"])
+            for i, rv in enumerate(previous_review_verdicts[-3:], 1):
+                lines.append(f"  Review #{i}: approve={rv.approve}, score={rv.security_score}")
+                if rv.concerns:
+                    lines.append(f"    Concerns: {'; '.join(rv.concerns[:5])}")
+                if rv.suggested_improvements:
+                    lines.append(f"    Required improvements: {'; '.join(rv.suggested_improvements[:5])}")
+                if rv.feedback:
+                    lines.append(f"    Feedback: {rv.feedback[:200]}")
 
         if previous_attempts:
             lines.append("")

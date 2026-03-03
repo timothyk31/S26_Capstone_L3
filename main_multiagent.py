@@ -270,6 +270,9 @@ def parse_args() -> argparse.Namespace:
                          default="balanced", help="Triage LLM quality tier")
     agent_g.add_argument("--review-model", default=None,
                          help="Override the Review agent LLM model (default: env REVIEW_AGENT_MODEL)")
+    agent_g.add_argument("--lenient-triage", action="store_true", default=False,
+                         help="Use lenient triage: prefer safe_to_remediate over "
+                              "requires_human_review when uncertain (useful for benchmarking)")
 
     # ── Concurrency ───
     conc = p.add_argument_group("Concurrency")
@@ -413,7 +416,7 @@ def main() -> int:
     )
 
     # ── Initialize agents (V2) ───────────────────────────────────────
-    triage_agent = TriageAgent(mode=args.triage_mode)
+    triage_agent = TriageAgent(mode=args.triage_mode, lenient=args.lenient_triage)
 
     remedy_agent = RemedyAgent(
         executor=executor,

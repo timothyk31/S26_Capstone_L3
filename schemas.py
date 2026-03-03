@@ -94,6 +94,10 @@ class RemedyInput(BaseModel):
     attempt_number: int = 1
     previous_attempts: List['RemediationAttempt'] = []
     review_feedback: Optional[str] = None
+    previous_review_verdicts: List['ReviewVerdict'] = Field(
+        default_factory=list,
+        description="Structured review verdicts from prior attempts (concerns, suggestions, scores)",
+    )
     
 class RemediationAttempt(BaseModel):
     finding_id: str
@@ -115,6 +119,10 @@ class ReviewInput(BaseModel):
     vulnerability: Vulnerability
     remediation_attempt: RemediationAttempt
     triage_decision: TriageDecision
+    previous_verdicts: List['ReviewVerdict'] = Field(
+        default_factory=list,
+        description="Review verdicts from prior attempts so reviewer can check if issues were addressed",
+    )
 
 
 class ReviewVerdict(BaseModel):
