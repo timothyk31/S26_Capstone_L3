@@ -110,6 +110,7 @@ def _call_llm(
     base_url: str,
     api_key: str,
     timeout: int = 90,
+    metrics_tracker=None,
 ) -> str:
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
@@ -123,10 +124,22 @@ def _call_llm(
             {"role": "user", "content": user_prompt},
         ],
     }
-    resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
-    if resp.status_code >= 400:
-        raise RuntimeError(f"OpenRouter API error {resp.status_code}: {resp.text}")
-    data = resp.json()
+    start_time = None
+    if metrics_tracker is not None:
+        start_time = metrics_tracker.start_call()
+    try:
+        resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+        if resp.status_code >= 400:
+            if metrics_tracker is not None:
+                metrics_tracker.record_call(None, agent="review", model=model, start_time=start_time, error=True, error_message=f"HTTP {resp.status_code}")
+            raise RuntimeError(f"OpenRouter API error {resp.status_code}: {resp.text}")
+        data = resp.json()
+        if metrics_tracker is not None:
+            metrics_tracker.record_call(data, agent="review", model=model, start_time=start_time)
+    except Exception:
+        if metrics_tracker is not None and start_time is not None:
+            metrics_tracker.record_call(None, agent="review", model=model, start_time=start_time, error=True, error_message="request exception")
+        raise
     choice = data.get("choices", [{}])[0]
     message = choice.get("message", {})
     content = message.get("content") or ""
@@ -206,6 +219,7 @@ class ReviewAgent:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         request_timeout: int = 90,
+        metrics_tracker=None,
     ):
         if api_key is None and base_url is None and model is None:
             api_key, base_url, model = _get_config()
@@ -213,6 +227,7 @@ class ReviewAgent:
         self.base_url = (base_url or os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
         self.model = model or os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
         self.request_timeout = request_timeout
+        self.metrics_tracker = metrics_tracker
 
     def process(self, input_data: ReviewInput) -> ReviewVerdict:
         """Run review on one finding: LLM analyzes input and returns a verdict."""
@@ -224,6 +239,7 @@ class ReviewAgent:
             base_url=self.base_url,
             api_key=self.api_key,
             timeout=self.request_timeout,
+            metrics_tracker=self.metrics_tracker,
         )
         return _parse_verdict(raw, input_data.vulnerability.id)
 

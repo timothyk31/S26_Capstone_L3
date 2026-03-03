@@ -88,6 +88,7 @@ class RemedyAgent:
         work_dir: Path,
         max_tool_iterations: int = 15,
         request_timeout: int = 120,
+        metrics_tracker=None,
     ):
         self.executor = executor
         self.scanner = scanner
@@ -107,6 +108,7 @@ class RemedyAgent:
 
         self.max_tool_iterations = max_tool_iterations
         self.request_timeout = request_timeout
+        self.metrics_tracker = metrics_tracker
 
     # -------------------------
     # Public API
@@ -433,20 +435,34 @@ class RemedyAgent:
         }
         last_exc: Optional[Exception] = None
         for attempt in range(_retries):
+            start_time = None
+            if self.metrics_tracker is not None:
+                start_time = self.metrics_tracker.start_call()
             try:
                 r = requests.post(self.endpoint, headers=self.headers, json=payload, timeout=self.request_timeout)
                 if r.status_code >= 500:
                     last_exc = RuntimeError(f"LLM API error {r.status_code}: {r.text}")
+                    if self.metrics_tracker is not None:
+                        self.metrics_tracker.record_call(None, agent="remedy", model=self.model_name, start_time=start_time, error=True, error_message=str(last_exc))
                     time.sleep(2 ** attempt)
                     continue
                 if r.status_code >= 400:
+                    if self.metrics_tracker is not None:
+                        self.metrics_tracker.record_call(None, agent="remedy", model=self.model_name, start_time=start_time, error=True, error_message=f"HTTP {r.status_code}")
                     raise RuntimeError(f"LLM API error {r.status_code}: {r.text}")
-                return r.json()
+                data = r.json()
+                if self.metrics_tracker is not None:
+                    self.metrics_tracker.record_call(data, agent="remedy", model=self.model_name, start_time=start_time)
+                return data
             except requests.exceptions.Timeout as exc:
                 last_exc = exc
+                if self.metrics_tracker is not None and start_time is not None:
+                    self.metrics_tracker.record_call(None, agent="remedy", model=self.model_name, start_time=start_time, error=True, error_message=str(exc))
                 time.sleep(2 ** attempt)
             except requests.exceptions.ConnectionError as exc:
                 last_exc = exc
+                if self.metrics_tracker is not None and start_time is not None:
+                    self.metrics_tracker.record_call(None, agent="remedy", model=self.model_name, start_time=start_time, error=True, error_message=str(exc))
                 time.sleep(2 ** attempt)
         raise RuntimeError(f"LLM API failed after {_retries} retries: {last_exc}")
 
