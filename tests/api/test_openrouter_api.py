@@ -19,6 +19,7 @@ class TestOpenRouterAPIContract:
 
     def setup_method(self):
         """Set up test environment."""
+        responses.stop()
         responses.reset()
         self.base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
         self.api_key = os.getenv("OPENROUTER_API_KEY", "test-key-123")
@@ -36,6 +37,11 @@ class TestOpenRouterAPIContract:
             tools=[],
             tool_executor=mock_tool_executor
         )
+    
+    def teardown_method(self):
+        """Clean up after each test."""
+        responses.stop()
+        responses.reset()
 
     @responses.activate
     @pytest.mark.contract

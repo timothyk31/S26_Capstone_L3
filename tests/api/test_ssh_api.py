@@ -1,6 +1,7 @@
 """API tests for SSH and system integration."""
 
 import pytest
+import yaml
 from unittest.mock import patch, Mock, MagicMock
 import subprocess
 import tempfile
@@ -11,17 +12,41 @@ from helpers.command_executor import ShellCommandExecutor
 from schemas import RunCommandResult
 
 
+def load_inventory():
+    """Load SSH connection details from inventory.yml"""
+    inventory_path = Path(__file__).parent.parent.parent / "inventory.yml"
+    if inventory_path.exists():
+        with open(inventory_path, 'r') as f:
+            inventory = yaml.safe_load(f)
+            host_config = inventory['all']['hosts']['myhost']
+            return {
+                'host': host_config['ansible_host'],
+                'port': host_config['ansible_port'],
+                'user': host_config['ansible_user'],
+                'key': host_config['ansible_ssh_private_key_file'],
+                'sudo_password': host_config.get('ansible_become_password')
+            }
+    return {
+        'host': 'test-host',
+        'port': 22,
+        'user': 'test-user',
+        'key': 'test-key',
+        'sudo_password': None
+    }
+
+
 @pytest.mark.api
 class TestSSHAPIIntegration:
     """Test SSH-based operations and system integration."""
 
     def setup_method(self):
         """Set up test environment."""
+        self.ssh_config = load_inventory()
         self.scanner = OpenSCAPScanner(
-            target_host="test-host",
-            ssh_user="test-user",
-            ssh_key="/path/to/key",
-            ssh_port=22
+            target_host=self.ssh_config['host'],
+            ssh_user=self.ssh_config['user'],
+            ssh_key=self.ssh_config['key'],
+            ssh_port=self.ssh_config['port']
         )
 
     @pytest.mark.requires_ssh
@@ -31,11 +56,11 @@ class TestSSHAPIIntegration:
         
         expected_elements = [
             "ssh",
-            "-i", "/path/to/key",
+            "-i", self.ssh_config['key'],
             "-o", "StrictHostKeyChecking=no",
             "-o", "UserKnownHostsFile=/dev/null",
-            "-p", "22",
-            "test-user@test-host",
+            "-p", str(self.ssh_config['port']),
+            f"{self.ssh_config['user']}@{self.ssh_config['host']}",
             "echo 'test'"
         ]
         
@@ -177,10 +202,13 @@ class TestShellCommandExecutorAPI:
 
     def setup_method(self):
         """Set up test environment."""
+        self.ssh_config = load_inventory()
         self.executor = ShellCommandExecutor(
-            host="test-host",
-            user="test-user", 
-            key="test-key"
+            host=self.ssh_config['host'],
+            user=self.ssh_config['user'], 
+            key=self.ssh_config['key'],
+            port=self.ssh_config['port'],
+            sudo_password=self.ssh_config['sudo_password']
         )
 
     def test_successful_command_execution(self):

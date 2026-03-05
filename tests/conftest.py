@@ -126,9 +126,18 @@ def mock_openscap_output():
 @pytest.fixture(autouse=True)
 def setup_test_environment():
     """Set up common test environment variables."""
-    with patch.dict('os.environ', {
-        'OPENROUTER_API_KEY': 'test-key',
-        'OPENROUTER_MODEL': 'test-model',
-        'OPENROUTER_BASE_URL': 'https://test-api.com/v1'
-    }):
+    import os
+    from dotenv import load_dotenv
+    load_dotenv()
+    
+    # Only set defaults if not already in environment
+    env_defaults = {}
+    if not os.getenv('OPENROUTER_API_KEY'):
+        env_defaults['OPENROUTER_API_KEY'] = 'test-key'
+    if not os.getenv('OPENROUTER_MODEL'):
+        env_defaults['OPENROUTER_MODEL'] = 'test-model'
+    if not os.getenv('OPENROUTER_BASE_URL'):
+        env_defaults['OPENROUTER_BASE_URL'] = 'https://test-api.com/v1'
+    
+    with patch.dict('os.environ', env_defaults):
         yield

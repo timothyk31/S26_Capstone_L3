@@ -76,11 +76,12 @@ class TestVulnerabilitySchema:
         with pytest.raises(ValidationError) as exc_info:
             Vulnerability()
         
-        error_dict = exc_info.value.error_dict()
-        assert "id" in error_dict
-        assert "title" in error_dict
-        assert "severity" in error_dict
-        assert "host" in error_dict
+        errors = exc_info.value.errors()
+        error_fields = [error['loc'][0] for error in errors]
+        assert "id" in error_fields
+        assert "title" in error_fields
+        assert "severity" in error_fields
+        assert "host" in error_fields
 
     def test_vulnerability_factory_methods(self):
         """Test vulnerability factory methods produce valid objects."""

@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import List, Optional
 
 
-PYTEST_CONFIG = "tests/pytest.ini"
+PYTEST_CONFIG = "pytest.ini"
 
 
 class TestRunner:
