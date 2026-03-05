@@ -75,6 +75,9 @@ class TestRunner:
         # Check test directory structure
         required_dirs = [
             self.test_dir / "unit",
+            self.test_dir / "unit" / "agents",
+            self.test_dir / "unit" / "workflow", 
+            self.test_dir / "unit" / "helpers",
             self.test_dir / "integration", 
             self.test_dir / "api",
             self.test_dir / "fixtures"
