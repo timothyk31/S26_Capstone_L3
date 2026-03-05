@@ -1,12 +1,16 @@
 """API contract tests for OpenRouter/LLM services."""
 
+import os
 import pytest
 import requests
 import responses
 from unittest.mock import patch
 import json
+from dotenv import load_dotenv
 
 from helpers.llm_base import ToolCallingLLM
+
+load_dotenv()
 
 
 @pytest.mark.api
@@ -15,9 +19,10 @@ class TestOpenRouterAPIContract:
 
     def setup_method(self):
         """Set up test environment."""
-        self.base_url = "https://openrouter.ai/api/v1"
-        self.api_key = "test-key-123"
-        self.model_name = "meta-llama/llama-3.1-70b-instruct"
+        responses.reset()
+        self.base_url = os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1")
+        self.api_key = os.getenv("OPENROUTER_API_KEY", "test-key-123")
+        self.model_name = os.getenv("OPENROUTER_MODEL", "meta-llama/llama-3.1-70b-instruct")
         
         def mock_tool_executor(tool_name: str, args: dict) -> dict:
             _ = tool_name, args  # Suppress unused variable warnings

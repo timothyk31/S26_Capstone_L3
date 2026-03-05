@@ -177,7 +177,11 @@ class TestShellCommandExecutorAPI:
 
     def setup_method(self):
         """Set up test environment."""
-        self.executor = ShellCommandExecutor()
+        self.executor = ShellCommandExecutor(
+            host="test-host",
+            user="test-user", 
+            key="test-key"
+        )
 
     def test_successful_command_execution(self):
         """Test successful command execution."""

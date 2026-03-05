@@ -15,6 +15,9 @@ from pathlib import Path
 from typing import List, Optional
 
 
+PYTEST_CONFIG = "tests/pytest.ini"
+
+
 class TestRunner:
     """Main test runner class."""
     
@@ -91,7 +94,7 @@ class TestRunner:
         print("RUNNING UNIT TESTS")
         print("="*50)
         
-        cmd = ["python", "-m", "pytest", "tests/unit"]
+        cmd = ["python", "-m", "pytest", "-c", PYTEST_CONFIG, "tests/unit"]
         
         if fast_only:
             cmd.extend(["-m", "unit and not slow"])
@@ -115,7 +118,7 @@ class TestRunner:
         print("="*50)
         
         cmd = [
-            "python", "-m", "pytest", "tests/integration",
+            "python", "-m", "pytest", "-c", PYTEST_CONFIG, "tests/integration",
             "-m", "integration and not requires_ssh and not requires_llm"
         ]
         
@@ -136,7 +139,7 @@ class TestRunner:
         print("="*50)
         
         cmd = [
-            "python", "-m", "pytest", "tests/api",
+            "python", "-m", "pytest", "-c", PYTEST_CONFIG, "tests/api",
             "-m", "api and not requires_ssh and not requires_llm"
         ]
         
@@ -157,7 +160,7 @@ class TestRunner:
         print("="*50)
         
         cmd = [
-            "python", "-m", "pytest", "tests/",
+            "python", "-m", "pytest", "-c", PYTEST_CONFIG, "tests/",
             "-m", "not requires_ssh and not requires_llm",
             "--cov=./",
             "--cov-report=html",
@@ -178,7 +181,7 @@ class TestRunner:
         print(f"RUNNING SPECIFIC TEST: {test_path}")
         print("="*50)
         
-        cmd = ["python", "-m", "pytest", test_path]
+        cmd = ["python", "-m", "pytest", "-c", PYTEST_CONFIG, test_path]
         
         if verbose:
             cmd.append("-v")
@@ -222,7 +225,7 @@ class TestRunner:
         print("="*50)
         
         cmd = [
-            "python", "-m", "pytest", "tests/",
+            "python", "-m", "pytest", "-c", PYTEST_CONFIG, "tests/",
             "-m", "slow",
             "--tb=short"
         ]
@@ -236,6 +239,7 @@ class TestRunner:
         
         artifacts = [
             ".pytest_cache",
+            "tests/.pytest_cache",
             "__pycache__",
             ".coverage",
             "htmlcov",

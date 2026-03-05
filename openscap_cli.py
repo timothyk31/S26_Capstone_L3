@@ -91,7 +91,9 @@ class OpenSCAPScanner:
                  output_file: str = "/tmp/oscap_results.xml",
                  datastream: str = "/usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml",
                  report_file: Optional[str] = None,
-                 sudo_password: Optional[str] = None) -> bool:
+                 sudo_password: Optional[str] = None,
+                 remote_results_xml: Optional[str] = None,
+                 remote_report_html: Optional[str] = None) -> bool:
         """
         Run OpenSCAP scan on target host
         
@@ -105,16 +107,21 @@ class OpenSCAPScanner:
         Returns:
             bool: True if scan completed (even with findings), False on error
         """
+        # Use remote_results_xml if provided, otherwise use output_file
+        results_file = remote_results_xml or output_file
+        # Use remote_report_html if provided, otherwise use report_file
+        report_output = remote_report_html or report_file
+        
         # Build oscap command - use sudo -S to read password from stdin if provided
         if sudo_password:
             oscap_cmd = f"echo '{sudo_password}' | sudo -S oscap xccdf eval --profile {profile}"
         else:
             oscap_cmd = f"sudo oscap xccdf eval --profile {profile}"
         
-        oscap_cmd += f" --results {output_file}"
+        oscap_cmd += f" --results {results_file}"
         
-        if report_file:
-            oscap_cmd += f" --report {report_file}"
+        if report_output:
+            oscap_cmd += f" --report {report_output}"
         
         oscap_cmd += f" {datastream}"
         
