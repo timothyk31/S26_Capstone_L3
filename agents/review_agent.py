@@ -221,6 +221,7 @@ class ReviewAgent:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         request_timeout: int = 90,
+        transcript_dir: Optional[str | Path] = None,
     ):
         if api_key is None and base_url is None and model is None:
             api_key, base_url, model = _get_config()
@@ -228,8 +229,11 @@ class ReviewAgent:
         self.base_url = (base_url or os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
         self.model = model or os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
         self.request_timeout = request_timeout
+        self._transcript_dir: Optional[Path] = Path(transcript_dir) if transcript_dir else None
+        if self._transcript_dir:
+            self._transcript_dir.mkdir(parents=True, exist_ok=True)
 
-    def process(self, input_data: ReviewInput) -> ReviewVerdict:
+    def process(self, input_data: ReviewInput, *, attempt: int = 1) -> ReviewVerdict:
         """Run review on one finding: LLM analyzes input and returns a verdict."""
         user_prompt = _build_review_prompt(input_data)
         raw = _call_llm(
@@ -240,6 +244,18 @@ class ReviewAgent:
             api_key=self.api_key,
             timeout=self.request_timeout,
         )
+
+        # Save transcript if transcript_dir is set
+        if self._transcript_dir:
+            vid = input_data.vulnerability.id
+            transcript = [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": raw},
+            ]
+            tp = self._transcript_dir / f"review_transcript_{vid}_attempt{attempt}.json"
+            tp.write_text(json.dumps(transcript, indent=2), encoding="utf-8")
+
         return _parse_verdict(raw, input_data.vulnerability.id)
 
     # ------------------------------------------------------------------

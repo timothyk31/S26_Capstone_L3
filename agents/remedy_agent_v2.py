@@ -93,7 +93,7 @@ class RemedyAgentV2:
             triage_decision=input_data.triage_decision,
             previous_verdicts=input_data.previous_review_verdicts,
         )
-        approval = self.review_v2.process(review_input)
+        approval = self.review_v2.process(review_input, attempt=input_data.attempt_number)
 
         if not approval.approved:
             console.print(

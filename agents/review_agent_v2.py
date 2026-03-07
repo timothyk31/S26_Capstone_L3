@@ -47,14 +47,14 @@ class ReviewAgentV2:
         self.review_agent = review_agent
         self.qa_agent = qa_agent
 
-    def process(self, review_input: ReviewInput) -> PreApprovalResult:
+    def process(self, review_input: ReviewInput, *, attempt: int = 1) -> PreApprovalResult:
         """Run Review then QA; return combined approval."""
         vid = review_input.vulnerability.id
 
         # ── Step 1: Review ────────────────────────────────────────────
         console.print(f"[bold cyan]  [{vid}] V2 Review: evaluating fix quality[/bold cyan]")
         try:
-            review_verdict: ReviewVerdict = self.review_agent.process(review_input)
+            review_verdict: ReviewVerdict = self.review_agent.process(review_input, attempt=attempt)
         except Exception as exc:
             console.print(f"[red]  [{vid}] Review error: {exc}[/red]")
             review_verdict = ReviewVerdict(
@@ -91,7 +91,7 @@ class ReviewAgentV2:
                 remediation_attempt=review_input.remediation_attempt,
                 review_verdict=review_verdict,
             )
-            qa_result = self.qa_agent.process(qa_input)
+            qa_result = self.qa_agent.process(qa_input, attempt=attempt)
         except Exception as exc:
             console.print(f"[red]  [{vid}] QA error: {exc}[/red]")
             # QA error → treat as unsafe

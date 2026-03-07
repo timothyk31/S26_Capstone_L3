@@ -72,6 +72,7 @@ from helpers.command_executor import ShellCommandExecutor
 from helpers.scanner import Scanner
 from openscap_cli import OpenSCAPScanner
 from parse_openscap import parse_openscap
+from context_pdf_writer import write_all_context_pdfs, _is_ssh_login_finding
 from schemas import TriageDecision, V2FindingResult, Vulnerability
 from workflow.pipeline_v2 import PipelineV2
 
@@ -367,13 +368,24 @@ def main() -> int:
 
     # ── Filter ────────────────────────────────────────────────────────
     filtered: List[Vulnerability] = []
+    ssh_skipped = 0
     for v in vulns:
+        # Skip SSH root login findings (would lock us out of the VM)
+        if _is_ssh_login_finding(v.title, v.rule, v.oval_id):
+            ssh_skipped += 1
+            continue
         try:
             sev = int(v.severity)
         except (ValueError, TypeError):
             sev = 0
         if sev >= args.min_severity:
             filtered.append(v)
+
+    if ssh_skipped:
+        console.print(
+            f"[yellow]Skipped {ssh_skipped} SSH root-login finding(s) "
+            f"(would lock out remote access).[/yellow]"
+        )
 
     if not filtered:
         console.print("[yellow]No findings meet the minimum severity threshold.[/yellow]")
@@ -416,7 +428,13 @@ def main() -> int:
     )
 
     # ── Initialize agents (V2) ───────────────────────────────────────
-    triage_agent = TriageAgent(mode=args.triage_mode, lenient=args.lenient_triage)
+    transcript_dir = work_dir / "transcripts"
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+
+    triage_agent = TriageAgent(
+        mode=args.triage_mode, lenient=args.lenient_triage,
+        transcript_dir=transcript_dir / "triage",
+    )
 
     remedy_agent = RemedyAgent(
         executor=executor,
@@ -426,9 +444,12 @@ def main() -> int:
 
     review_agent = ReviewAgent(
         model=args.review_model,
+        transcript_dir=transcript_dir / "review",
     )
 
-    qa_agent_v2 = QAAgentV2()
+    qa_agent_v2 = QAAgentV2(
+        transcript_dir=transcript_dir / "qa",
+    )
 
     # V2 wrappers: Review wraps QA, Remedy wraps Review
     review_agent_v2 = ReviewAgentV2(
@@ -632,6 +653,21 @@ def main() -> int:
         console.print(f"[green]Triage PDF: {report_dir / 'triage_report.pdf'}[/green]")
     except Exception as exc:
         console.print(f"[yellow]Triage PDF skipped: {exc}[/yellow]")
+
+    # ── Context / Messages PDFs (one per agent) ──────────────────────
+    try:
+        ctx_pdfs = write_all_context_pdfs(
+            results=results,
+            work_dir=args.work_dir,
+            output_dir=report_dir,
+            target_host=host or "unknown",
+        )
+        for agent_key, pdf_path in ctx_pdfs.items():
+            console.print(f"[green]Context PDF ({agent_key}): {pdf_path}[/green]")
+        if not ctx_pdfs:
+            console.print("[yellow]No agent transcripts found — context PDFs skipped[/yellow]")
+    except Exception as exc:
+        console.print(f"[yellow]Context PDFs skipped: {exc}[/yellow]")
 
     # ── Summary ───────────────────────────────────────────────────────
     elapsed = time.time() - t0

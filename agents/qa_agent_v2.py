@@ -17,6 +17,7 @@ import json
 import os
 import re
 import time
+from pathlib import Path
 from typing import List, Optional, Tuple
 
 import requests
@@ -205,6 +206,7 @@ class QAAgentV2:
         base_url: Optional[str] = None,
         model: Optional[str] = None,
         request_timeout: int = 90,
+        transcript_dir: Optional[str | Path] = None,
     ):
         if api_key is None and base_url is None and model is None:
             api_key, base_url, model = _get_config()
@@ -212,8 +214,11 @@ class QAAgentV2:
         self.base_url = (base_url or os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
         self.model = model or os.getenv("QA_AGENT_V2_MODEL") or os.getenv("OPENROUTER_MODEL") or DEFAULT_QA_V2_MODEL
         self.request_timeout = request_timeout
+        self._transcript_dir: Optional[Path] = Path(transcript_dir) if transcript_dir else None
+        if self._transcript_dir:
+            self._transcript_dir.mkdir(parents=True, exist_ok=True)
 
-    def process(self, input_data: QAInput) -> QAResult:
+    def process(self, input_data: QAInput, *, attempt: int = 1) -> QAResult:
         """Run QA validation: LLM expert opinion only, no commands."""
         start = time.time()
         user_prompt = _build_qa_prompt(input_data)
@@ -225,6 +230,18 @@ class QAAgentV2:
             api_key=self.api_key,
             timeout=self.request_timeout,
         )
+
+        # Save transcript if transcript_dir is set
+        if self._transcript_dir:
+            vid = input_data.vulnerability.id
+            transcript = [
+                {"role": "system", "content": self.SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+                {"role": "assistant", "content": raw},
+            ]
+            tp = self._transcript_dir / f"qa_transcript_{vid}_attempt{attempt}.json"
+            tp.write_text(json.dumps(transcript, indent=2), encoding="utf-8")
+
         result = _parse_qa_result(raw, input_data.vulnerability.id)
         result.validation_duration = time.time() - start
         return result

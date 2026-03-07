@@ -374,7 +374,12 @@ class TriageAgent(BaseAgent):
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: int = 60,
+        transcript_dir: Optional[str | Path] = None,
     ):
+        self._transcript_dir: Optional[Path] = Path(transcript_dir) if transcript_dir else None
+        if self._transcript_dir:
+            self._transcript_dir.mkdir(parents=True, exist_ok=True)
+
         api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not api_key:
             raise RuntimeError(
@@ -487,7 +492,19 @@ class TriageAgent(BaseAgent):
                 self._client.model = model_name
                 raw = self._client.classify(prompt)
                 js = _extract_json(raw)
-                return _LLMVerdict.model_validate_json(js)
+                verdict = _LLMVerdict.model_validate_json(js)
+
+                # Save transcript if transcript_dir is set
+                if self._transcript_dir:
+                    transcript = [
+                        {"role": "system", "content": self._client.system_prompt},
+                        {"role": "user", "content": prompt},
+                        {"role": "assistant", "content": raw},
+                    ]
+                    tp = self._transcript_dir / f"triage_transcript_{vuln.id}.json"
+                    tp.write_text(json.dumps(transcript, indent=2), encoding="utf-8")
+
+                return verdict
 
             except (ValidationError, json.JSONDecodeError) as exc:
                 last_err = f"Validation/JSON error with {model_name}: {exc}"
