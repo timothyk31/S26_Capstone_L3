@@ -163,8 +163,19 @@ class RemedyAgent:
         attempt.duration = time.time() - start
 
         # Save transcript/log
+        usage_records = session_result.get("usage", [])
+        total_api_seconds = round(sum(u.get("_api_call_seconds", 0) for u in usage_records), 3)
+        usage_total = {}
+        if usage_records:
+            usage_total = {
+                "prompt_tokens": sum(u.get("prompt_tokens", 0) for u in usage_records),
+                "completion_tokens": sum(u.get("completion_tokens", 0) for u in usage_records),
+                "total_tokens": sum(u.get("total_tokens", 0) for u in usage_records),
+                "total_api_seconds": total_api_seconds,
+                "per_turn": usage_records,
+            }
         (self.work_dir / f"remedy_transcript_{session_label}.json").write_text(
-            json.dumps(session_result["transcript"], indent=2), encoding="utf-8"
+            json.dumps({"messages": session_result["transcript"], "usage": usage_total or None}, indent=2, default=str), encoding="utf-8"
         )
 
         return attempt
@@ -338,16 +349,41 @@ class RemedyAgent:
         execution_details: List[RunCommandResult] = []
         final_message: str = ""
         last_scan_result: Optional[Dict[str, Any]] = None  # Track LLM-initiated scans
+        usage_records: List[Dict[str, Any]] = []
 
         tool_calls_used = 0
         total_turns = 0  # Counts ALL LLM round-trips (tool + reasoning)
 
         while tool_calls_used < self.max_tool_iterations and total_turns < self.max_tool_iterations + 6:
             total_turns += 1
+            _t0 = time.time()
             resp = self._chat(messages)
+            _turn_duration = time.time() - _t0
+            turn_usage = resp.get("usage")
+            if turn_usage:
+                turn_usage["_api_call_seconds"] = round(_turn_duration, 3)
+                usage_records.append(turn_usage)
+            else:
+                usage_records.append({"_api_call_seconds": round(_turn_duration, 3)})
             msg = resp["choices"][0]["message"]
 
-            transcript.append({"role": "assistant", "content": msg.get("content"), "tool_calls": msg.get("tool_calls")})
+            assistant_entry = {
+                "role": "assistant",
+                "content": msg.get("content"),
+                "tool_calls": msg.get("tool_calls"),
+            }
+            # Capture reasoning/thinking tokens if present
+            reasoning = (
+                msg.get("reasoning_content")
+                or msg.get("reasoning")
+                or msg.get("thinking")
+            )
+            if reasoning:
+                assistant_entry["reasoning"] = reasoning
+            # Store the full raw message object for auditing
+            assistant_entry["_raw_message"] = dict(msg)
+
+            transcript.append(assistant_entry)
             messages.append(msg)
 
             tool_calls = msg.get("tool_calls") or []
@@ -435,6 +471,7 @@ class RemedyAgent:
             "execution_details": execution_details,
             "final_message": final_message,
             "last_scan_result": last_scan_result,
+            "usage": usage_records,
         }
 
     def _chat(self, messages: List[Dict[str, Any]], _retries: int = 3) -> Dict[str, Any]:

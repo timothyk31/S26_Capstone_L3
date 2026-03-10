@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import requests
 from dotenv import find_dotenv, load_dotenv
@@ -66,15 +66,13 @@ class _LLMVerdict(BaseModel):
 @dataclass(frozen=True)
 class ModelSpec:
     name: str
-    temperature: float = 0.0
-    max_tokens: int = 600
 
 
 MODELS_BY_MODE: Dict[str, ModelSpec] = {
-    "fast":          ModelSpec(name="meta-llama/llama-3.1-8b-instruct",  temperature=0.0, max_tokens=450),
-    "balanced":      ModelSpec(name="anthropic/claude-3.5-sonnet",       temperature=0.0, max_tokens=650),
-    "smart":         ModelSpec(name="openai/gpt-4o",                     temperature=0.0, max_tokens=750),
-    "nemotron_free": ModelSpec(name="nvidia/nemotron-4-mini-instruct",   temperature=0.1, max_tokens=500),
+    "fast":          ModelSpec(name="meta-llama/llama-3.1-8b-instruct"),
+    "balanced":      ModelSpec(name="anthropic/claude-3.5-sonnet"),
+    "smart":         ModelSpec(name="openai/gpt-4o"),
+    "nemotron_free": ModelSpec(name="nvidia/nemotron-4-mini-instruct"),
 }
 
 
@@ -87,16 +85,12 @@ class _OpenRouterClient:
         model: str,
         base_url: str = "https://openrouter.ai/api/v1",
         timeout: int = 60,
-        temperature: float = 0.0,
-        max_tokens: int = 600,
         system_prompt: Optional[str] = None,
     ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
-        self.temperature = temperature
-        self.max_tokens = max_tokens
         self.endpoint = f"{self.base_url}/chat/completions"
         self.system_prompt = system_prompt or (
             "You are a security triage assistant for Rocky/RHEL 9 OpenSCAP STIG findings.\n"
@@ -118,8 +112,6 @@ class _OpenRouterClient:
     def classify(self, prompt: str) -> str:
         payload = {
             "model": self.model,
-            "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
             "provider": {"allow_fallbacks": True},
             "response_format": {"type": "json_object"},
             "messages": [
@@ -134,12 +126,14 @@ class _OpenRouterClient:
         last_err: Optional[str] = None
         for attempt in range(1, 4):
             try:
+                _t0 = time.time()
                 r = requests.post(
                     self.endpoint,
                     headers=self.headers,
                     json=payload,
                     timeout=self.timeout,
                 )
+                _api_duration = time.time() - _t0
                 if r.status_code in (429, 500, 502, 503, 504):
                     last_err = f"Transient OpenRouter error {r.status_code}: {r.text}"
                     time.sleep(0.5 * attempt)
@@ -148,15 +142,13 @@ class _OpenRouterClient:
                     raise RuntimeError(f"OpenRouter API error {r.status_code}: {r.text}")
 
                 data = r.json()
-                content = (
-                    data.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                    or ""
-                ).strip()
+                choice = data.get("choices", [{}])[0]
+                message = choice.get("message", {})
+                content = (message.get("content") or "").strip()
                 if not content:
                     raise RuntimeError("OpenRouter returned empty content.")
-                return content
+                usage = data.get("usage")
+                return content, message, usage, _api_duration
 
             except requests.RequestException as e:
                 last_err = f"RequestException: {e}"
@@ -390,7 +382,8 @@ class TriageAgent(BaseAgent):
         self._lenient = lenient
 
         spec = MODELS_BY_MODE.get(mode, MODELS_BY_MODE["balanced"])
-        chosen_model = model_override or os.getenv("OPENROUTER_MODEL") or spec.name
+        env_model = os.getenv("OPENROUTER_MODEL") or os.getenv("TRIAGE_MODEL")
+        chosen_model = model_override or env_model or spec.name
 
         system_prompt = None
         if lenient:
@@ -407,8 +400,6 @@ class TriageAgent(BaseAgent):
             model=chosen_model,
             base_url=base_url or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             timeout=timeout,
-            temperature=spec.temperature,
-            max_tokens=spec.max_tokens,
             system_prompt=system_prompt,
         )
         self._fallback_models: List[str] = fallback_models or []
@@ -490,19 +481,35 @@ class TriageAgent(BaseAgent):
         for model_name in candidates:
             try:
                 self._client.model = model_name
-                raw = self._client.classify(prompt)
+                raw, full_message, usage, api_duration = self._client.classify(prompt)
                 js = _extract_json(raw)
                 verdict = _LLMVerdict.model_validate_json(js)
 
                 # Save transcript if transcript_dir is set
                 if self._transcript_dir:
-                    transcript = [
-                        {"role": "system", "content": self._client.system_prompt},
-                        {"role": "user", "content": prompt},
-                        {"role": "assistant", "content": raw},
-                    ]
+                    # Capture reasoning/thinking tokens if present
+                    reasoning = (
+                        full_message.get("reasoning_content")
+                        or full_message.get("reasoning")
+                        or full_message.get("thinking")
+                    )
+
+                    transcript_data = {
+                        "finding_id": vuln.id,
+                        "model": model_name,
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "assistant_message": {
+                            "content": raw,
+                            **(({"reasoning": reasoning}) if reasoning else {}),
+                        },
+                        "_raw_message": dict(full_message),
+                        "usage": usage,
+                        "timing": {
+                            "api_call_seconds": round(api_duration, 3),
+                        },
+                    }
                     tp = self._transcript_dir / f"triage_transcript_{vuln.id}.json"
-                    tp.write_text(json.dumps(transcript, indent=2), encoding="utf-8")
+                    tp.write_text(json.dumps(transcript_data, indent=2, default=str), encoding="utf-8")
 
                 return verdict
 

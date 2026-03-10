@@ -72,6 +72,7 @@ from helpers.command_executor import ShellCommandExecutor
 from helpers.scanner import Scanner
 from openscap_cli import OpenSCAPScanner
 from parse_openscap import parse_openscap
+from braintrust_eval_writer import write_braintrust_eval
 from context_pdf_writer import write_all_context_pdfs, _is_ssh_login_finding
 from schemas import TriageDecision, V2FindingResult, Vulnerability
 from workflow.pipeline_v2 import PipelineV2
@@ -287,6 +288,14 @@ def parse_args() -> argparse.Namespace:
     out.add_argument("--report-dir", default=DEFAULT_REPORT_DIR,
                      help="Output directory for reports and playbook")
 
+    # ── Braintrust ───
+    bt = p.add_argument_group("Braintrust logging")
+    bt.add_argument("--braintrust-name", default=None, metavar="NAME",
+                    help="Log results to Braintrust under this experiment name. "
+                         "Omit to skip Braintrust logging.")
+    bt.add_argument("--braintrust-project", default="OpenSCAP-Remediation-Pipeline",
+                    help="Braintrust project name (default: OpenSCAP-Remediation-Pipeline)")
+
     return p.parse_args()
 
 
@@ -367,12 +376,29 @@ def main() -> int:
         return 0
 
     # ── Filter ────────────────────────────────────────────────────────
+    SKIP_FINDING_IDS = {
+        "openscap_023",
+        # SSH-related findings — remediation can break the active SSH session
+        "openscap_004",  # Configure SSH Client to Use FIPS 140-2 Validated MACs
+        "openscap_005",  # Configure SSH Server to Use FIPS 140-2 Validated MACs
+        "openscap_068",  # Verify Permissions on SSH Server Config File
+        "openscap_069",  # Set SSH Client Alive Count Max
+        "openscap_070",  # Set SSH Client Alive Interval
+        "openscap_071",  # Disable SSH Access via Empty Passwords
+        "openscap_072",  # Disable SSH Root Login
+        "openscap_073",  # Disable X11 Forwarding
+        "openscap_074",  # Enable SSH Warning Banner
+    }
     filtered: List[Vulnerability] = []
     ssh_skipped = 0
+    manual_skipped = 0
     for v in vulns:
         # Skip SSH root login findings (would lock us out of the VM)
         if _is_ssh_login_finding(v.title, v.rule, v.oval_id):
             ssh_skipped += 1
+            continue
+        if v.id in SKIP_FINDING_IDS:
+            manual_skipped += 1
             continue
         try:
             sev = int(v.severity)
@@ -385,6 +411,11 @@ def main() -> int:
         console.print(
             f"[yellow]Skipped {ssh_skipped} SSH root-login finding(s) "
             f"(would lock out remote access).[/yellow]"
+        )
+    if manual_skipped:
+        console.print(
+            f"[yellow]Skipped {manual_skipped} manually excluded finding(s): "
+            f"{', '.join(sorted(SKIP_FINDING_IDS))}[/yellow]"
         )
 
     if not filtered:
@@ -668,6 +699,27 @@ def main() -> int:
             console.print("[yellow]No agent transcripts found — context PDFs skipped[/yellow]")
     except Exception as exc:
         console.print(f"[yellow]Context PDFs skipped: {exc}[/yellow]")
+
+    # ── Braintrust logging ────────────────────────────────────────────
+    if args.braintrust_name:
+        try:
+            shared_model = os.getenv("OPENROUTER_MODEL", "")
+            model_metadata = {
+                "triage": shared_model or os.getenv("TRIAGE_MODEL", args.triage_mode),
+                "remedy": os.getenv("REMEDY_MODEL", ""),
+                "review": args.review_model or shared_model or os.getenv("REVIEW_AGENT_MODEL", ""),
+                "qa": shared_model or os.getenv("QA_AGENT_V2_MODEL", ""),
+            }
+            write_braintrust_eval(
+                report_dir=str(report_dir),
+                results=results,
+                experiment_name=args.braintrust_name,
+                project_name=args.braintrust_project,
+                model_metadata=model_metadata,
+            )
+            console.print(f"[green]Braintrust experiment logged: {args.braintrust_name}[/green]")
+        except Exception as exc:
+            console.print(f"[yellow]Braintrust logging failed: {exc}[/yellow]")
 
     # ── Summary ───────────────────────────────────────────────────────
     elapsed = time.time() - t0

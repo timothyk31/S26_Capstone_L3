@@ -9,6 +9,7 @@ Default model: nvidia/nemotron-3-nano-30b-a3b:free (use nvidia/nemotron-3-nano-3
 import json
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -43,7 +44,7 @@ def _get_config() -> Tuple[str, str, str]:
             "OPENROUTER_API_KEY is required. Add it to .env (get a key from https://openrouter.ai/keys)."
         )
     base_url = (os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
-    model = os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
+    model = os.getenv("OPENROUTER_MODEL") or os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
     return api_key, base_url, model
 
 
@@ -124,7 +125,7 @@ def _call_llm(
     base_url: str,
     api_key: str,
     timeout: int = 90,
-) -> str:
+) -> Tuple[str, Dict[str, Any], Optional[Dict[str, Any]], float]:
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
         "Content-Type": "application/json",
@@ -138,14 +139,17 @@ def _call_llm(
             {"role": "user", "content": user_prompt},
         ],
     }
+    _t0 = time.time()
     resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+    _api_duration = time.time() - _t0
     if resp.status_code >= 400:
         raise RuntimeError(f"OpenRouter API error {resp.status_code}: {resp.text}")
     data = resp.json()
     choice = data.get("choices", [{}])[0]
     message = choice.get("message", {})
     content = message.get("content") or ""
-    return content.strip()
+    usage = data.get("usage")
+    return content.strip(), message, usage, _api_duration
 
 
 def _parse_verdict(raw: str, finding_id: str) -> ReviewVerdict:
@@ -227,7 +231,7 @@ class ReviewAgent:
             api_key, base_url, model = _get_config()
         self.api_key = api_key or _get_config()[0]
         self.base_url = (base_url or os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
-        self.model = model or os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
+        self.model = model or os.getenv("OPENROUTER_MODEL") or os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
         self.request_timeout = request_timeout
         self._transcript_dir: Optional[Path] = Path(transcript_dir) if transcript_dir else None
         if self._transcript_dir:
@@ -236,7 +240,7 @@ class ReviewAgent:
     def process(self, input_data: ReviewInput, *, attempt: int = 1) -> ReviewVerdict:
         """Run review on one finding: LLM analyzes input and returns a verdict."""
         user_prompt = _build_review_prompt(input_data)
-        raw = _call_llm(
+        raw, full_message, usage, api_duration = _call_llm(
             user_prompt,
             self.SYSTEM_PROMPT,
             model=self.model,
@@ -248,13 +252,30 @@ class ReviewAgent:
         # Save transcript if transcript_dir is set
         if self._transcript_dir:
             vid = input_data.vulnerability.id
-            transcript = [
-                {"role": "system", "content": self.SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-                {"role": "assistant", "content": raw},
-            ]
+            # Capture reasoning/thinking tokens if present
+            reasoning = (
+                full_message.get("reasoning_content")
+                or full_message.get("reasoning")
+                or full_message.get("thinking")
+            )
+
+            transcript_data = {
+                "finding_id": vid,
+                "model": self.model,
+                "attempt": attempt,
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "assistant_message": {
+                    "content": raw,
+                    **(({"reasoning": reasoning}) if reasoning else {}),
+                },
+                "_raw_message": dict(full_message),
+                "usage": usage,
+                "timing": {
+                    "api_call_seconds": round(api_duration, 3),
+                },
+            }
             tp = self._transcript_dir / f"review_transcript_{vid}_attempt{attempt}.json"
-            tp.write_text(json.dumps(transcript, indent=2), encoding="utf-8")
+            tp.write_text(json.dumps(transcript_data, indent=2, default=str), encoding="utf-8")
 
         return _parse_verdict(raw, input_data.vulnerability.id)
 

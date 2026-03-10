@@ -30,6 +30,20 @@ SSH_LOGIN_SKIP_KEYWORDS = [
     "sshd_disable_root_login",
     "disable ssh root login",
     "disallow direct root login",
+    # Broader SSH config changes that can break the active connection
+    "configure ssh",
+    "ssh server",
+    "ssh client",
+    "sshd_config",
+    "opensshserver",
+    "openssh.config",
+    "ssh client alive",
+    "ssh access via empty",
+    "ssh root login",
+    "ssh warning banner",
+    "x11 forwarding",
+    "permissions on ssh",
+    "fips 140-2 validated macs",
 ]
 
 
