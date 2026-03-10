@@ -1,0 +1,1005 @@
+{
+  "messages": [
+    {
+      "role": "system",
+      "content": "You are an adaptive remediation agent on Rocky Linux / RHEL. Use tools to inspect and remediate the finding.\nSTRATEGY:\n1. ALWAYS read the relevant config file FIRST with read_file before making changes.\n2. Identify the exact key/value that needs changing.\n3. Use write_file for config changes (avoids shell quoting issues) or run_cmd for sed/systemctl.\n4. Verify with run_cmd (e.g. grep) that the change took effect.\n5. Call scan to confirm the fix.\nRULES:\n- One command at a time. Do NOT chain with && or ;\n- This is Rocky Linux/RHEL. Use dnf (not apt). Use systemctl (not service).\n- Do NOT duplicate config lines. If a key already exists, modify it in-place with sed.\n- If a key is commented out (# minlen = 8), uncomment and set the correct value.\n- stderr may contain SSH banners \u2014 ignore them. Check exit_code and stdout for results."
+    },
+    {
+      "role": "user",
+      "content": "You are the Remedy agent remediating ONE OpenSCAP finding on Rocky Linux 10.\nYou MUST use ONLY the provided tools: run_cmd, read_file, write_file, scan.\nRules:\n- Use run_cmd for EXACTLY ONE shell command at a time. Do NOT chain with && ; or multiline scripts.\n- Commands run as root. Do not prefix with sudo.\n- ALWAYS use read_file to inspect the target config file BEFORE modifying it.\n- Do NOT append duplicate lines. Use sed -i to modify existing values in-place.\n- If a line is commented (e.g. '# minlen = 8'), uncomment it and set the value.\n- Prefer minimal, reversible changes and verify with scan at the end.\n\nFINDING:\n- Title: Add nodev Option to /dev/shm\n- Rule Name: mount_option_dev_shm_nodev\n- Rule ID: xccdf_org.ssgproject.content_rule_mount_option_dev_shm_nodev\n- Finding ID: openscap_045\n- Severity: 2\n- Host: localhost\n\nTRIAGE CONTEXT:\n- Approved for remediation because: The nodev mount option is a low-risk change that prevents creation of device files in /dev/shm, which is a temporary directory.\n- Description: The nodev mount option can be used to prevent creation of device files in /dev/shm. Legitimate character and block devices should not exist within temporary directories like /dev/shm. Add the nodev option to the fourth column of /etc/fstab for the line which controls mounting of /dev/shm.\n- Recommendation: Remediation script: # Remediation is applicable only in certain platforms if ( ! ( { rpm --quiet -q kernel-core ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} && ([ -f /run/ostree-booted ] || [ -L /ostree ]) ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ); then function perform_remediation { mount_point_match_regexp=\"$(printf \"^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]\" /dev/shm)\" # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab if ! grep -q \"$mount_point_match_regexp\" /etc/fstab; th\n\nREVIEW FEEDBACK (apply improvements):\nQA validation error: name 'datetime' is not defined Suggestions: Use a more precise regex or target the exact line number for the /dev/shm entry.; Create a backup of /etc/fstab before editing.; Add idempotent checks to ensure the nodev option is added only once.; Validate the mount option after a reboot to confirm persistence.; Enhance platform detection to include all supported OS variations.\n\nSTRUCTURED REVIEW HISTORY (address these specific issues):\n  Review #1: approve=False, score=3\n    Concerns: The change is undone after being applied, so the fix is not persisted.; Mount options are modified and then reverted without ensuring persistence across reboots.; The script's conditional logic may not cover all platform cases, risking incomplete remediation.\n    Required improvements: Persist the nodev mount option in /etc/fstab by editing the appropriate line and running 'mount -o remount,nodev /dev/shm' to apply it immediately.; Validate that the edit was successful with a subsequent grep or mount check.; Ensure the change is made only on supported platforms and does not interfere with container or OSTree environments.\n    Feedback: The remediation script attempts to add the nodev option but subsequently reverts the change, leaving /dev/shm mounted without nodev. Consequently, the vulnerability remains unresolved.\n  Review #2: approve=True, score=9\n    Concerns: The sed command may modify the wrong line if multiple tmpfs entries exist.; No backup of /etc/fstab is created before modification.; Platform detection logic may not cover all edge cases.; Persistence across remounts is not fully verified after reboot.\n    Required improvements: Use a more precise regex or target the exact line number for the /dev/shm entry.; Create a backup of /etc/fstab before editing.; Add idempotent checks to ensure the nodev option is added only once.; Validate the mount option after a reboot to confirm persistence.; Enhance platform detection to include all supported OS variations.\n    Feedback: Remediation successfully adds the nodev option to /dev/shm but could be more robust and persistent.\n\nPREVIOUS ATTEMPTS (2):\n* Attempt 1: success=False scan_passed=False\n  Commands:\n    - mount -o remount,nodev /dev/shm\n    - sed -i 's|tmpfs /dev/shm tmpfs nodev,defaults|tmpfs /dev/shm tmpfs defaults|' /etc/fstab\n    - grep tmpfs /etc/fstab\n    - systemctl daemon-reload\n  Scan output: Vulnerability openscap_045: result=fail\n* Attempt 2: success=False scan_passed=False\n  Commands:\n    - grep nodev /etc/fstab\n    - sed -i 's|tmpfs /dev/shm tmpfs defaults|tmpfs /dev/shm tmpfs nodev,defaults|' /etc/fstab\n    - mount -o remount,nodev /dev/shm\n    - grep nodev /etc/fstab\n  Scan output: Vulnerability openscap_045 not found in single-rule scan (possibly fixed)\n\nReturn tool calls as needed. End by calling scan."
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-7e835e96c6654fce866a79378b2f0bf8",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"/etc/fstab\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-7e835e96c6654fce866a79378b2f0bf8",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"path\": \"/etc/fstab\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-7e835e96c6654fce866a79378b2f0bf8",
+      "content": "{\"command\": \"test -f /etc/fstab && cat /etc/fstab || (echo FILE_NOT_FOUND >&2; exit 2)\", \"stdout\": \"\\n#\\n# /etc/fstab\\n# Created by anaconda on Mon Feb  9 07:40:38 2026\\n#\\n# Accessible filesystems, by reference, are maintained under '/dev/disk/'.\\n# See man pages fstab(5), findfs(8), mount(8) and/or blkid(8) for more info.\\n#\\n# After editing this file, run 'systemctl daemon-reload' to update systemd\\n# units generated from this file.\\n#\\n/dev/mapper/rlm-root    /                       xfs     defaults        0 0\\nUUID=8bbec118-7baf-40c6-910b-6a336e901242 /boot xfs     defaults        0 0\\nUUID=F56C-228D          /boot/efi               vfat    umask=0077,shortname=winnt 0 2\\n/dev/mapper/rlm-home    /home                   xfs     defaults        0 0\\n/dev/mapper/rlm-swap    none                    swap    defaults        0 0\\ntmpfs /dev/shm tmpfs nodev,defaults 0 0\\n\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 2.233910322189331, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-8bd58739088f45749883448471a9b3d2",
+          "function": {
+            "name": "run_cmd",
+            "arguments": "{\"command\": \"grep tmpfs /etc/fstab\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-8bd58739088f45749883448471a9b3d2",
+            "function": {
+              "name": "run_cmd",
+              "arguments": "{\"command\": \"grep tmpfs /etc/fstab\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-8bd58739088f45749883448471a9b3d2",
+      "content": "{\"command\": \"grep tmpfs /etc/fstab\", \"stdout\": \"tmpfs /dev/shm tmpfs nodev,defaults 0 0\\n\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 1.434145212173462, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-2c8124bc871147d7be28a086f91eea45",
+          "function": {
+            "name": "run_cmd",
+            "arguments": "{\"command\": \"mount -o remount,nodev /dev/shm\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-2c8124bc871147d7be28a086f91eea45",
+            "function": {
+              "name": "run_cmd",
+              "arguments": "{\"command\": \"mount -o remount,nodev /dev/shm\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-2c8124bc871147d7be28a086f91eea45",
+      "content": "{\"command\": \"mount -o remount,nodev /dev/shm\", \"stdout\": \"\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 1.511354923248291, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-4b600e17a0fa41da84cb0dd55056beae",
+          "function": {
+            "name": "run_cmd",
+            "arguments": "{\"command\": \"grep nodev /etc/fstab\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-4b600e17a0fa41da84cb0dd55056beae",
+            "function": {
+              "name": "run_cmd",
+              "arguments": "{\"command\": \"grep nodev /etc/fstab\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-4b600e17a0fa41da84cb0dd55056beae",
+      "content": "{\"command\": \"grep nodev /etc/fstab\", \"stdout\": \"tmpfs /dev/shm tmpfs nodev,defaults 0 0\\n\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 1.4578564167022705, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-9efd4d23a69cfc2b",
+          "function": {
+            "name": "scan",
+            "arguments": "{}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-9efd4d23a69cfc2b",
+            "function": {
+              "name": "scan",
+              "arguments": "{}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-9efd4d23a69cfc2b",
+      "content": "{\"pass\": true, \"summary\": \"Vulnerability openscap_045 not found in single-rule scan (possibly fixed)\", \"raw\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": "The JSON for a function call that best answers the given prompt is:\n\n{\"name\": \"read_file\", \"parameters\": {\"path\": \"/etc/fstab\"}}\n\nThis function call reads the contents of the /etc/fstab file, which is necessary to determine the current configuration of the /dev/shm mount point.\n\nThe next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"grep tmpfs /etc/fstab\"}}\n\nThis function call checks if the nodev option is already present in the /etc/fstab file for the /dev/shm mount point.\n\nIf the nodev option is not present, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"sed -i 's|tmpfs /dev/shm tmpfs defaults|tmpfs /dev/shm tmpfs nodev,defaults|' /etc/fstab\"}}\n\nThis function call adds the nodev option to the /etc/fstab file for the /dev/shm mount point.\n\nAfter modifying the /etc/fstab file, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"mount -o remount,nodev /dev/shm\"}}\n\nThis function call remounts the /dev/shm file system with the nodev option.\n\nFinally, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"grep nodev /etc/fstab\"}}\n\nThis function call checks if the nodev option has been successfully added to the /etc/fstab file for the /dev/shm mount point.\n\nThe final function call should be:\n\n{\"name\": \"scan\", \"parameters\": {}}\n\nThis function call runs a scan to verify that the vulnerability has been fixed.",
+      "tool_calls": null,
+      "_raw_message": {
+        "role": "assistant",
+        "content": "The JSON for a function call that best answers the given prompt is:\n\n{\"name\": \"read_file\", \"parameters\": {\"path\": \"/etc/fstab\"}}\n\nThis function call reads the contents of the /etc/fstab file, which is necessary to determine the current configuration of the /dev/shm mount point.\n\nThe next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"grep tmpfs /etc/fstab\"}}\n\nThis function call checks if the nodev option is already present in the /etc/fstab file for the /dev/shm mount point.\n\nIf the nodev option is not present, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"sed -i 's|tmpfs /dev/shm tmpfs defaults|tmpfs /dev/shm tmpfs nodev,defaults|' /etc/fstab\"}}\n\nThis function call adds the nodev option to the /etc/fstab file for the /dev/shm mount point.\n\nAfter modifying the /etc/fstab file, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"mount -o remount,nodev /dev/shm\"}}\n\nThis function call remounts the /dev/shm file system with the nodev option.\n\nFinally, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"grep nodev /etc/fstab\"}}\n\nThis function call checks if the nodev option has been successfully added to the /etc/fstab file for the /dev/shm mount point.\n\nThe final function call should be:\n\n{\"name\": \"scan\", \"parameters\": {}}\n\nThis function call runs a scan to verify that the vulnerability has been fixed.",
+        "refusal": null,
+        "reasoning": null
+      }
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-37891f699ef64fc98321ddc1f0e60c10",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"/etc/fstab\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-37891f699ef64fc98321ddc1f0e60c10",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"path\": \"/etc/fstab\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-37891f699ef64fc98321ddc1f0e60c10",
+      "content": "{\"command\": \"test -f /etc/fstab && cat /etc/fstab || (echo FILE_NOT_FOUND >&2; exit 2)\", \"stdout\": \"\\n#\\n# /etc/fstab\\n# Created by anaconda on Mon Feb  9 07:40:38 2026\\n#\\n# Accessible filesystems, by reference, are maintained under '/dev/disk/'.\\n# See man pages fstab(5), findfs(8), mount(8) and/or blkid(8) for more info.\\n#\\n# After editing this file, run 'systemctl daemon-reload' to update systemd\\n# units generated from this file.\\n#\\n/dev/mapper/rlm-root    /                       xfs     defaults        0 0\\nUUID=8bbec118-7baf-40c6-910b-6a336e901242 /boot xfs     defaults        0 0\\nUUID=F56C-228D          /boot/efi               vfat    umask=0077,shortname=winnt 0 2\\n/dev/mapper/rlm-home    /home                   xfs     defaults        0 0\\n/dev/mapper/rlm-swap    none                    swap    defaults        0 0\\ntmpfs /dev/shm tmpfs nodev,defaults 0 0\\n\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 2.0892958641052246, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-a37a27bc41e48df8",
+          "function": {
+            "name": "run_cmd",
+            "arguments": "{\"command\": \"grep tmpfs /etc/fstab\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-a37a27bc41e48df8",
+            "function": {
+              "name": "run_cmd",
+              "arguments": "{\"command\": \"grep tmpfs /etc/fstab\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-a37a27bc41e48df8",
+      "content": "{\"command\": \"grep tmpfs /etc/fstab\", \"stdout\": \"tmpfs /dev/shm tmpfs nodev,defaults 0 0\\n\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 1.5136349201202393, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "call_v3ub2wpalgleenrhsdvg6kcx",
+          "function": {
+            "name": "run_cmd",
+            "arguments": "{\"command\":\"mount -o remount,nodev /dev/shm\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "call_v3ub2wpalgleenrhsdvg6kcx",
+            "function": {
+              "name": "run_cmd",
+              "arguments": "{\"command\":\"mount -o remount,nodev /dev/shm\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_v3ub2wpalgleenrhsdvg6kcx",
+      "content": "{\"command\": \"mount -o remount,nodev /dev/shm\", \"stdout\": \"\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 1.5197396278381348, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-ec8c03fe953b44119cad9c1b3e5cd423",
+          "function": {
+            "name": "run_cmd",
+            "arguments": "{\"command\": \"grep nodev /etc/fstab\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-ec8c03fe953b44119cad9c1b3e5cd423",
+            "function": {
+              "name": "run_cmd",
+              "arguments": "{\"command\": \"grep nodev /etc/fstab\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-ec8c03fe953b44119cad9c1b3e5cd423",
+      "content": "{\"command\": \"grep nodev /etc/fstab\", \"stdout\": \"tmpfs /dev/shm tmpfs nodev,defaults 0 0\\n\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 1.4359865188598633, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-0d717acffa0e4c8b8ef44778777cae71",
+          "function": {
+            "name": "scan",
+            "arguments": "{}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-0d717acffa0e4c8b8ef44778777cae71",
+            "function": {
+              "name": "scan",
+              "arguments": "{}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-0d717acffa0e4c8b8ef44778777cae71",
+      "content": "{\"pass\": true, \"summary\": \"Vulnerability openscap_045 not found in single-rule scan (possibly fixed)\", \"raw\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": "The JSON for a function call that best answers the given prompt is:\n\n{\"name\": \"read_file\", \"parameters\": {\"path\": \"/etc/fstab\"}}\n\nThis function call reads the contents of the /etc/fstab file, which is necessary to determine the current configuration of the /dev/shm mount point.\n\nThe next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"grep tmpfs /etc/fstab\"}}\n\nThis function call checks if the nodev option is already present in the /etc/fstab file for the /dev/shm mount point.\n\nIf the nodev option is not present, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"sed -i 's|tmpfs /dev/shm tmpfs defaults|tmpfs /dev/shm tmpfs nodev,defaults|' /etc/fstab\"}}\n\nThis function call adds the nodev option to the /etc/fstab file for the /dev/shm mount point.\n\nAfter modifying the /etc/fstab file, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"mount -o remount,nodev /dev/shm\"}}\n\nThis function call remounts the /dev/shm file system with the nodev option.\n\nFinally, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"grep nodev /etc/fstab\"}}\n\nThis function call checks if the nodev option has been successfully added to the /etc/fstab file for the /dev/shm mount point.\n\nThe final function call should be:\n\n{\"name\": \"scan\", \"parameters\": {}}\n\nThis function call runs a scan to verify that the vulnerability has been fixed.",
+      "tool_calls": null,
+      "_raw_message": {
+        "role": "assistant",
+        "content": "The JSON for a function call that best answers the given prompt is:\n\n{\"name\": \"read_file\", \"parameters\": {\"path\": \"/etc/fstab\"}}\n\nThis function call reads the contents of the /etc/fstab file, which is necessary to determine the current configuration of the /dev/shm mount point.\n\nThe next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"grep tmpfs /etc/fstab\"}}\n\nThis function call checks if the nodev option is already present in the /etc/fstab file for the /dev/shm mount point.\n\nIf the nodev option is not present, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"sed -i 's|tmpfs /dev/shm tmpfs defaults|tmpfs /dev/shm tmpfs nodev,defaults|' /etc/fstab\"}}\n\nThis function call adds the nodev option to the /etc/fstab file for the /dev/shm mount point.\n\nAfter modifying the /etc/fstab file, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"mount -o remount,nodev /dev/shm\"}}\n\nThis function call remounts the /dev/shm file system with the nodev option.\n\nFinally, the next function call should be:\n\n{\"name\": \"run_cmd\", \"parameters\": {\"command\": \"grep nodev /etc/fstab\"}}\n\nThis function call checks if the nodev option has been successfully added to the /etc/fstab file for the /dev/shm mount point.\n\nThe final function call should be:\n\n{\"name\": \"scan\", \"parameters\": {}}\n\nThis function call runs a scan to verify that the vulnerability has been fixed.",
+        "refusal": null,
+        "reasoning": null
+      }
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-53536aafdb464297843c952cb6ca0455",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"/etc/fstab\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-53536aafdb464297843c952cb6ca0455",
+            "function": {
+              "name": "read_file",
+              "arguments": "{\"path\": \"/etc/fstab\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-53536aafdb464297843c952cb6ca0455",
+      "content": "{\"command\": \"test -f /etc/fstab && cat /etc/fstab || (echo FILE_NOT_FOUND >&2; exit 2)\", \"stdout\": \"\\n#\\n# /etc/fstab\\n# Created by anaconda on Mon Feb  9 07:40:38 2026\\n#\\n# Accessible filesystems, by reference, are maintained under '/dev/disk/'.\\n# See man pages fstab(5), findfs(8), mount(8) and/or blkid(8) for more info.\\n#\\n# After editing this file, run 'systemctl daemon-reload' to update systemd\\n# units generated from this file.\\n#\\n/dev/mapper/rlm-root    /                       xfs     defaults        0 0\\nUUID=8bbec118-7baf-40c6-910b-6a336e901242 /boot xfs     defaults        0 0\\nUUID=F56C-228D          /boot/efi               vfat    umask=0077,shortname=winnt 0 2\\n/dev/mapper/rlm-home    /home                   xfs     defaults        0 0\\n/dev/mapper/rlm-swap    none                    swap    defaults        0 0\\ntmpfs /dev/shm tmpfs nodev,defaults 0 0\\n\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 2.1803462505340576, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-587b453fc68a4b77bf1b42138400d887",
+          "function": {
+            "name": "run_cmd",
+            "arguments": "{\"command\": \"grep tmpfs /etc/fstab\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-587b453fc68a4b77bf1b42138400d887",
+            "function": {
+              "name": "run_cmd",
+              "arguments": "{\"command\": \"grep tmpfs /etc/fstab\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-587b453fc68a4b77bf1b42138400d887",
+      "content": "{\"command\": \"grep tmpfs /etc/fstab\", \"stdout\": \"tmpfs /dev/shm tmpfs nodev,defaults 0 0\\n\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 1.4858908653259277, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-fcacc0257cbb44a29fd1bb04b797f683",
+          "function": {
+            "name": "run_cmd",
+            "arguments": "{\"command\": \"mount -o remount,nodev /dev/shm\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-fcacc0257cbb44a29fd1bb04b797f683",
+            "function": {
+              "name": "run_cmd",
+              "arguments": "{\"command\": \"mount -o remount,nodev /dev/shm\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-fcacc0257cbb44a29fd1bb04b797f683",
+      "content": "{\"command\": \"mount -o remount,nodev /dev/shm\", \"stdout\": \"\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 1.499840497970581, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-91162d38258f4029b71191c8a9dddd06",
+          "function": {
+            "name": "run_cmd",
+            "arguments": "{\"command\": \"grep nodev /etc/fstab\"}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-91162d38258f4029b71191c8a9dddd06",
+            "function": {
+              "name": "run_cmd",
+              "arguments": "{\"command\": \"grep nodev /etc/fstab\"}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-91162d38258f4029b71191c8a9dddd06",
+      "content": "{\"command\": \"grep nodev /etc/fstab\", \"stdout\": \"tmpfs /dev/shm tmpfs nodev,defaults 0 0\\n\", \"stderr\": \"You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. \\n\\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions: \\n\\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel\", \"exit_code\": 0, \"success\": true, \"duration\": 1.538320779800415, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+    },
+    {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+        {
+          "type": "function",
+          "index": 0,
+          "id": "chatcmpl-tool-8c076c8f40944038ab231c536b95f974",
+          "function": {
+            "name": "scan",
+            "arguments": "{}"
+          }
+        }
+      ],
+      "_raw_message": {
+        "role": "assistant",
+        "content": null,
+        "refusal": null,
+        "reasoning": null,
+        "tool_calls": [
+          {
+            "type": "function",
+            "index": 0,
+            "id": "chatcmpl-tool-8c076c8f40944038ab231c536b95f974",
+            "function": {
+              "name": "scan",
+              "arguments": "{}"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "chatcmpl-tool-8c076c8f40944038ab231c536b95f974",
+      "content": "{\"pass\": true, \"summary\": \"Vulnerability openscap_045 not found in single-rule scan (possibly fixed)\", \"raw\": null}"
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 68025,
+    "completion_tokens": 1059,
+    "total_tokens": 69084,
+    "total_api_seconds": 48.487,
+    "per_turn": [
+      {
+        "prompt_tokens": 1852,
+        "completion_tokens": 25,
+        "total_tokens": 1877,
+        "cost": 0.00026002,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00026002,
+          "upstream_inference_prompt_cost": 0.00025002,
+          "upstream_inference_completions_cost": 1e-05
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.571
+      },
+      {
+        "prompt_tokens": 2339,
+        "completion_tokens": 23,
+        "total_tokens": 2362,
+        "cost": 0.000324965,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.000324965,
+          "upstream_inference_prompt_cost": 0.000315765,
+          "upstream_inference_completions_cost": 9.2e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.292
+      },
+      {
+        "prompt_tokens": 2555,
+        "completion_tokens": 27,
+        "total_tokens": 2582,
+        "cost": 0.000659,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.000659,
+          "upstream_inference_prompt_cost": 0.00063875,
+          "upstream_inference_completions_cost": 2.025e-05
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 0.63
+      },
+      {
+        "prompt_tokens": 2761,
+        "completion_tokens": 23,
+        "total_tokens": 2784,
+        "cost": 0.000381935,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.000381935,
+          "upstream_inference_prompt_cost": 0.000372735,
+          "upstream_inference_completions_cost": 9.2e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.469
+      },
+      {
+        "prompt_tokens": 2990,
+        "completion_tokens": 12,
+        "total_tokens": 3002,
+        "cost": 0.00036336,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00036336,
+          "upstream_inference_prompt_cost": 0.0003588,
+          "upstream_inference_completions_cost": 4.56e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.861
+      },
+      {
+        "prompt_tokens": 3033,
+        "completion_tokens": 369,
+        "total_tokens": 3402,
+        "cost": 0.000557055,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.000557055,
+          "upstream_inference_prompt_cost": 0.000409455,
+          "upstream_inference_completions_cost": 0.0001476
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 15.966
+      },
+      {
+        "prompt_tokens": 3406,
+        "completion_tokens": 20,
+        "total_tokens": 3426,
+        "cost": 0.00046781,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00046781,
+          "upstream_inference_prompt_cost": 0.00045981,
+          "upstream_inference_completions_cost": 8e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.314
+      },
+      {
+        "prompt_tokens": 3912,
+        "completion_tokens": 23,
+        "total_tokens": 3935,
+        "cost": 0.00047818,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00047818,
+          "upstream_inference_prompt_cost": 0.00046944,
+          "upstream_inference_completions_cost": 8.74e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 3.931
+      },
+      {
+        "prompt_tokens": 3688,
+        "completion_tokens": 29,
+        "total_tokens": 3717,
+        "cost": 0.00327096,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00327096,
+          "upstream_inference_prompt_cost": 0.00324544,
+          "upstream_inference_completions_cost": 2.552e-05
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 2.391
+      },
+      {
+        "prompt_tokens": 4318,
+        "completion_tokens": 23,
+        "total_tokens": 4341,
+        "cost": 0.00059213,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00059213,
+          "upstream_inference_prompt_cost": 0.00058293,
+          "upstream_inference_completions_cost": 9.2e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.579
+      },
+      {
+        "prompt_tokens": 4535,
+        "completion_tokens": 12,
+        "total_tokens": 4547,
+        "cost": 0.000617025,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.000617025,
+          "upstream_inference_prompt_cost": 0.000612225,
+          "upstream_inference_completions_cost": 4.8e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.198
+      },
+      {
+        "prompt_tokens": 4590,
+        "completion_tokens": 369,
+        "total_tokens": 4959,
+        "cost": 0.00076725,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00076725,
+          "upstream_inference_prompt_cost": 0.00061965,
+          "upstream_inference_completions_cost": 0.0001476
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 9.016
+      },
+      {
+        "prompt_tokens": 4963,
+        "completion_tokens": 19,
+        "total_tokens": 4982,
+        "cost": 0.000677605,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.000677605,
+          "upstream_inference_prompt_cost": 0.000670005,
+          "upstream_inference_completions_cost": 7.6e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.148
+      },
+      {
+        "prompt_tokens": 5451,
+        "completion_tokens": 23,
+        "total_tokens": 5474,
+        "cost": 0.000745085,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.000745085,
+          "upstream_inference_prompt_cost": 0.000735885,
+          "upstream_inference_completions_cost": 9.2e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.557
+      },
+      {
+        "prompt_tokens": 5668,
+        "completion_tokens": 27,
+        "total_tokens": 5695,
+        "cost": 0.00143725,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00143725,
+          "upstream_inference_prompt_cost": 0.001417,
+          "upstream_inference_completions_cost": 2.025e-05
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 0.812
+      },
+      {
+        "prompt_tokens": 5874,
+        "completion_tokens": 23,
+        "total_tokens": 5897,
+        "cost": 0.00080219,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00080219,
+          "upstream_inference_prompt_cost": 0.00079299,
+          "upstream_inference_completions_cost": 9.2e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.719
+      },
+      {
+        "prompt_tokens": 6090,
+        "completion_tokens": 12,
+        "total_tokens": 6102,
+        "cost": 0.00082695,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 0.00082695,
+          "upstream_inference_prompt_cost": 0.00082215,
+          "upstream_inference_completions_cost": 4.8e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        },
+        "_api_call_seconds": 1.033
+      }
+    ]
+  }
+}

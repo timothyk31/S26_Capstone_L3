@@ -1,0 +1,175 @@
+[
+  {
+    "role": "system",
+    "content": "You are an adaptive remediation agent on Rocky Linux / RHEL. Use tools to inspect and remediate the finding.\nSTRATEGY:\n1. ALWAYS read the relevant config file FIRST with read_file before making changes.\n2. Identify the exact key/value that needs changing.\n3. Use write_file for config changes (avoids shell quoting issues) or run_cmd for sed/systemctl.\n4. Verify with run_cmd (e.g. grep) that the change took effect.\n5. Call scan to confirm the fix.\nRULES:\n- One command at a time. Do NOT chain with && or ;\n- This is Rocky Linux/RHEL. Use dnf (not apt). Use systemctl (not service).\n- Do NOT duplicate config lines. If a key already exists, modify it in-place with sed.\n- If a key is commented out (# minlen = 8), uncomment and set the correct value.\n- stderr may contain SSH banners \u2014 ignore them. Check exit_code and stdout for results."
+  },
+  {
+    "role": "user",
+    "content": "You are the Remedy agent remediating ONE OpenSCAP finding on Rocky Linux 10.\nYou MUST use ONLY the provided tools: run_cmd, read_file, write_file, scan.\nRules:\n- Use run_cmd for EXACTLY ONE shell command at a time. Do NOT chain with && ; or multiline scripts.\n- Commands run as root. Do not prefix with sudo.\n- ALWAYS use read_file to inspect the target config file BEFORE modifying it.\n- Do NOT append duplicate lines. Use sed -i to modify existing values in-place.\n- If a line is commented (e.g. '# minlen = 8'), uncomment it and set the value.\n- Prefer minimal, reversible changes and verify with scan at the end.\n\nFINDING:\n- Title: Configure Time Service Maxpoll Interval\n- Rule Name: chronyd_or_ntpd_set_maxpoll\n- Rule ID: xccdf_org.ssgproject.content_rule_chronyd_or_ntpd_set_maxpoll\n- Finding ID: openscap_021\n- Severity: 2\n- Host: localhost\n\nTRIAGE CONTEXT:\n- Approved for remediation because: The finding involves adjusting the maxpoll interval in NTP/Chrony configuration files, which is a low\u2011risk, non\u2011critical setting that can be safely modified without affecting system stability or security.\n- Description: The maxpoll should be configured to in /etc/ntp.conf or /etc/chrony.conf (or /etc/chrony.d/) to continuously poll time servers. To configure maxpoll in /etc/ntp.conf or /etc/chrony.conf (or /etc/chrony.d/) add the following after each server, pool or peer entry: maxpoll to server directives. If using chrony, any pool directives should be configured too.\n- Recommendation: Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core && { ( rpm --quiet -q chrony || rpm --quiet -q ntp ); }; then var_time_service_set_maxpoll='' pof=\"/usr/sbin/pidof\" CONFIG_FILES=\"/etc/ntp.conf\" $pof ntpd || { CHRONY_D_PATH=/etc/chrony.d/ mapfile -t CONFIG_FILES < <(find ${CHRONY_D_PATH}.* -type f -name '*.conf') CONFIG_FILES+=(/etc/chrony.conf) } # get list of ntp files for config_file in \"${CONFIG_FILES[@]}\" ; do # Set maxpoll values to var_time_service_set_maxpoll sed -i \"s/^\\(\\(server\\|pool\\|peer\\).*maxpoll\\) [0-9,-][0-9]*\\(.*\\)$/\\1 $va\n\nReturn tool calls as needed. End by calling scan."
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "type": "function",
+        "index": 0,
+        "id": "call_6948da9458f24971b3c5e059",
+        "function": {
+          "name": "read_file",
+          "arguments": "{\"path\": \"/etc/ntp.conf\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_6948da9458f24971b3c5e059",
+    "content": "{\"command\": \"test -f /etc/ntp.conf && cat /etc/ntp.conf || (echo FILE_NOT_FOUND >&2; exit 2)\", \"stdout\": \"\", \"stderr\": \"FILE_NOT_FOUND\", \"exit_code\": 2, \"success\": false, \"duration\": 2.0309231281280518, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "type": "function",
+        "index": 0,
+        "id": "call_7c19fd4b39334ff3adfd479f",
+        "function": {
+          "name": "read_file",
+          "arguments": "{\"path\": \"/etc/chrony.conf\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_7c19fd4b39334ff3adfd479f",
+    "content": "{\"command\": \"test -f /etc/chrony.conf && cat /etc/chrony.conf || (echo FILE_NOT_FOUND >&2; exit 2)\", \"stdout\": \"# Use public servers from the pool.ntp.org project.\\n# Please consider joining the pool (https://www.pool.ntp.org/join.html).\\n#pool 2.rocky.pool.ntp.org iburst maxpoll 16\\n\\n# Use NTP servers from DHCP.\\nsourcedir /run/chrony-dhcp\\n\\n# Record the rate at which the system clock gains/losses time.\\ndriftfile /var/lib/chrony/drift\\n\\n# Allow the system clock to be stepped in the first three updates\\n# if its offset is larger than 1 second.\\nmakestep 1.0 3\\n\\n# Enable kernel synchronization of the real-time clock (RTC).\\nrtcsync\\n\\n# Enable hardware timestamping on all interfaces that support it.\\n#hwtimestamp *\\n\\n# Increase the minimum number of selectable sources required to adjust\\n# the system clock.\\n#minsources 2\\n\\n# Allow NTP client access from local network.\\n#allow 192.168.0.0/16\\n\\n# Serve time even if not synchronized to a time source.\\n#local stratum 10\\n\\n# Require authentication (nts or key option) for all NTP sources.\\n#authselectmode require\\n\\n# Specify file containing keys for NTP authentication.\\nkeyfile /etc/chrony.keys\\n\\n# Save NTS keys and cookies.\\nntsdumpdir /var/lib/chrony\\n\\n# Insert/delete leap seconds by slewing instead of stepping.\\n#leapsecmode slew\\n\\n# Get TAI-UTC offset and leap seconds from the system tz database.\\nleapsectz right/UTC\\n\\n# Specify directory for log files.\\nlogdir /var/log/chrony\\n\\n# Select which information is logged.\\n#log measurements statistics tracking\\n# Per : Set port 0 in /etc/chrony.conf\\nport 0\\n# Per : Set cmdport 0 in /etc/chrony.conf\\ncmdport 0\\nserver 127.0.0.1 iburst\\n\", \"stderr\": \"\", \"exit_code\": 0, \"success\": true, \"duration\": 1.0376405715942383, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "type": "function",
+        "index": 0,
+        "id": "call_c3d3c918bcc044fd91024f31",
+        "function": {
+          "name": "run_cmd",
+          "arguments": "{\"command\": \"ls -l /etc/chrony.d/\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_c3d3c918bcc044fd91024f31",
+    "content": "{\"command\": \"ls -l /etc/chrony.d/\", \"stdout\": \"\", \"stderr\": \"ls: cannot access '/etc/chrony.d/': No such file or directory\", \"exit_code\": 2, \"success\": false, \"duration\": 1.0794014930725098, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "type": "function",
+        "index": 0,
+        "id": "call_65e2709696d6402488cfcbdd",
+        "function": {
+          "name": "run_cmd",
+          "arguments": "{\"command\": \"grep -E 'server|pool|peer' /etc/chrony.conf\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_65e2709696d6402488cfcbdd",
+    "content": "{\"command\": \"grep -E 'server|pool|peer' /etc/chrony.conf\", \"stdout\": \"# Use public servers from the pool.ntp.org project.\\n# Please consider joining the pool (https://www.pool.ntp.org/join.html).\\n#pool 2.rocky.pool.ntp.org iburst maxpoll 16\\n# Use NTP servers from DHCP.\\nserver 127.0.0.1 iburst\\n\", \"stderr\": \"\", \"exit_code\": 0, \"success\": true, \"duration\": 0.9535152912139893, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "type": "function",
+        "index": 0,
+        "id": "call_d45058d099a341658248e634",
+        "function": {
+          "name": "run_cmd",
+          "arguments": "{\"command\": \"sed -i 's/^\\\\(server.*iburst\\\\)$/\\\\1 maxpoll 6/' /etc/chrony.conf\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_d45058d099a341658248e634",
+    "content": "{\"command\": \"sed -i 's/^\\\\(server.*iburst\\\\)$/\\\\1 maxpoll 6/' /etc/chrony.conf\", \"stdout\": \"\", \"stderr\": \"\", \"exit_code\": 0, \"success\": true, \"duration\": 1.072573184967041, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "type": "function",
+        "index": 0,
+        "id": "call_28333d4a51ba4cd590ef8588",
+        "function": {
+          "name": "read_file",
+          "arguments": "{\"path\": \"/etc/chrony.conf\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_28333d4a51ba4cd590ef8588",
+    "content": "{\"command\": \"test -f /etc/chrony.conf && cat /etc/chrony.conf || (echo FILE_NOT_FOUND >&2; exit 2)\", \"stdout\": \"# Use public servers from the pool.ntp.org project.\\n# Please consider joining the pool (https://www.pool.ntp.org/join.html).\\n#pool 2.rocky.pool.ntp.org iburst maxpoll 16\\n\\n# Use NTP servers from DHCP.\\nsourcedir /run/chrony-dhcp\\n\\n# Record the rate at which the system clock gains/losses time.\\ndriftfile /var/lib/chrony/drift\\n\\n# Allow the system clock to be stepped in the first three updates\\n# if its offset is larger than 1 second.\\nmakestep 1.0 3\\n\\n# Enable kernel synchronization of the real-time clock (RTC).\\nrtcsync\\n\\n# Enable hardware timestamping on all interfaces that support it.\\n#hwtimestamp *\\n\\n# Increase the minimum number of selectable sources required to adjust\\n# the system clock.\\n#minsources 2\\n\\n# Allow NTP client access from local network.\\n#allow 192.168.0.0/16\\n\\n# Serve time even if not synchronized to a time source.\\n#local stratum 10\\n\\n# Require authentication (nts or key option) for all NTP sources.\\n#authselectmode require\\n\\n# Specify file containing keys for NTP authentication.\\nkeyfile /etc/chrony.keys\\n\\n# Save NTS keys and cookies.\\nntsdumpdir /var/lib/chrony\\n\\n# Insert/delete leap seconds by slewing instead of stepping.\\n#leapsecmode slew\\n\\n# Get TAI-UTC offset and leap seconds from the system tz database.\\nleapsectz right/UTC\\n\\n# Specify directory for log files.\\nlogdir /var/log/chrony\\n\\n# Select which information is logged.\\n#log measurements statistics tracking\\n# Per : Set port 0 in /etc/chrony.conf\\nport 0\\n# Per : Set cmdport 0 in /etc/chrony.conf\\ncmdport 0\\nserver 127.0.0.1 iburst maxpoll 6\\n\", \"stderr\": \"\", \"exit_code\": 0, \"success\": true, \"duration\": 0.9204878807067871, \"timed_out\": false, \"truncated_stdout\": false, \"truncated_stderr\": false, \"normalized_from\": null}"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "type": "function",
+        "index": 0,
+        "id": "call_264b0d778d4344c39245ab51",
+        "function": {
+          "name": "scan",
+          "arguments": "{}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_264b0d778d4344c39245ab51",
+    "content": "{\"pass\": true, \"summary\": \"Vulnerability openscap_021 not found in single-rule scan (possibly fixed)\", \"raw\": null}"
+  },
+  {
+    "role": "assistant",
+    "content": "The\u202f/etc/chrony.conf file has been updated to include a\u202fmaxpoll\u202fsetting for the active server entry:\n\n* Modified the line `server 127.0.0.1 iburst` to `server 127.0.0.1 iburst maxpoll 6`.\n\nA subsequent scan confirms that the OpenSCAP rule\u202f`openscap_021`\u202f(no longer reports a deficiency), indicating the remediation is successful.",
+    "tool_calls": null
+  },
+  {
+    "role": "assistant",
+    "content": "Remediation has been applied: the\u202f/etc/chrony.conf\u202ffile now includes a\u202fmaxpoll\u202fsetting (`maxpoll 6`) for the active server line. A subsequent scan confirms the finding is no longer present.",
+    "tool_calls": null
+  },
+  {
+    "role": "assistant",
+    "content": "Remediation completed. The\u202f/etc/chrony.conf\u202ffile has been updated to include a\u202fmaxpoll\u202fsetting (`maxpoll 6`) for the active server entry, and a subsequent scan confirms the OpenSCAP finding is now resolved.",
+    "tool_calls": null
+  },
+  {
+    "role": "assistant",
+    "content": "Remediation completed. The\u202f/etc/chrony.conf\u202ffile has been updated to include a\u202fmaxpoll\u202fsetting (`maxpoll 6`) for the active server entry, and a subsequent scan confirms the OpenSCAP finding is now resolved.",
+    "tool_calls": null
+  },
+  {
+    "role": "assistant",
+    "content": "Remediation completed. The\u202f/etc/chrony.conf\u202ffile has been updated to include a\u202fmaxpoll\u202fsetting (`maxpoll 6`) for the active server entry, and a subsequent scan confirms the OpenSCAP finding is now resolved.",
+    "tool_calls": null
+  }
+]
