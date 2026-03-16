@@ -132,10 +132,15 @@ class Scanner:
         Falls back to full scan if the rule ID cannot be determined or the
         single-rule scan fails.
         """
-        rule_id = vuln.oval_id or vuln.rule or ""  # Full XCCDF rule ID
-        if not rule_id or "xccdf_org.ssgproject.content_rule_" not in rule_id:
-            # Cannot determine rule ID — fall back to full scan
-            return self.scan_for_vulnerability(vuln)
+        rule_id = vuln.oval_id or ""
+        if "xccdf_org.ssgproject.content_rule_" not in rule_id:
+            # oval_id lacks the full SSG prefix — try to build the ID from the
+            # short rule name before falling back to the full 10-minute scan.
+            short_name = vuln.rule or ""
+            if short_name:
+                rule_id = f"xccdf_org.ssgproject.content_rule_{short_name}"
+            else:
+                return self.scan_for_vulnerability(vuln)
 
         scan_file = self.work_dir / f"verify_rule_{vuln.id}.xml"
         parsed_file = self.work_dir / f"verify_rule_{vuln.id}.json"

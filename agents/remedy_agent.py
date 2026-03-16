@@ -151,9 +151,13 @@ class RemedyAgent:
         attempt.execution_details = session_result["execution_details"]
         attempt.llm_verdict = ToolVerdict(message=session_result.get("final_message", ""), resolved=False)
 
-        # Reuse the LLM's scan result if it called scan during the session;
-        # otherwise run a single-rule verification scan now.
-        scan_result = session_result.get("last_scan_result") or self._tool_scan(vuln)
+        # Always run an authoritative post-session scan so that scan_passed
+        # reflects the final system state after ALL changes are applied.
+        # (last_scan_result from the LLM's session may be stale — e.g. the LLM
+        # scanned before completing the fix, got pass=False, then kept working
+        # but never scanned again.  Using that stale result would cause an
+        # unnecessary retry even when the fix was actually applied.)
+        scan_result = self._tool_scan(vuln)
         attempt.scan_passed = bool(scan_result.get("pass"))
         attempt.scan_output = scan_result.get("summary") or scan_result.get("raw")
 
@@ -179,6 +183,49 @@ class RemedyAgent:
         )
 
         return attempt
+
+    def plan_fix(self, input_data: RemedyInput) -> str:
+        """Ask the LLM to describe its proposed fix without executing anything.
+
+        Returns a text description of the planned remediation (no tools called).
+        Used by RemedyAgentV2 to consult Review+QA before applying.
+        """
+        vuln = input_data.vulnerability
+        rule_id = vuln.oval_id or vuln.rule or vuln.title
+        rule_name = rule_id.replace("xccdf_org.ssgproject.content_rule_", "")
+
+        prompt = (
+            f"You are planning a remediation for ONE OpenSCAP finding on Rocky Linux.\n"
+            f"DO NOT execute anything. Only DESCRIBE your proposed fix.\n\n"
+            f"FINDING:\n"
+            f"- Title: {vuln.title}\n"
+            f"- Rule: {rule_name}\n"
+            f"- Severity: {vuln.severity}\n"
+            f"- Description: {(vuln.description or '(none)')[:400]}\n"
+            f"- Recommendation: {(vuln.recommendation or '(none)')[:400]}\n\n"
+            f"Describe:\n"
+            f"1. What config files you would modify\n"
+            f"2. What commands you would run\n"
+            f"3. Why this approach is correct\n"
+            f"4. Any risks or side effects\n"
+        )
+        if input_data.review_feedback:
+            prompt += f"\nPREVIOUS FEEDBACK (address this):\n{input_data.review_feedback[:600]}\n"
+        if input_data.previous_attempts:
+            prompt += f"\nPREVIOUS ATTEMPTS FAILED ({len(input_data.previous_attempts)}). Try a different approach.\n"
+
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": "You are a Linux security remediation planner. Describe your proposed fix clearly and concisely."},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        resp = requests.post(self.endpoint, headers=self.headers, json=payload, timeout=self.request_timeout)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"LLM API error {resp.status_code}: {resp.text}")
+        data = resp.json()
+        return (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
 
     # -------------------------
     # Prompt + tool definitions
