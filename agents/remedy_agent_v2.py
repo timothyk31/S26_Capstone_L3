@@ -1,14 +1,11 @@
 """
-Remedy Agent V2: Generates and applies a fix, then calls ReviewAgentV2
-(which chains to QA) for pre-scan approval.
+Remedy Agent V2: Plan → Consult → Apply workflow.
 
 V2 flow for a single attempt:
-  1. Execute the LLM tool-calling session (same as v1 — commands run on host).
-  2. Call ReviewAgentV2.process() which runs Review → QA.
-  3. If BOTH approve  → run verification scan.
-     - Scan passes  → return success (pipeline goes straight to aggregation).
-     - Scan fails   → return failure  (pipeline retries with a new fix).
-  4. If either rejects → return failure with feedback (pipeline retries).
+  1. Ask remedy LLM to describe its proposed fix (no execution).
+  2. Pass the plan to ReviewAgentV2 (Review → QA) for advisory feedback.
+  3. Inject the advisory feedback into the RemedyInput and execute the fix
+     via the standard RemedyAgent tool-calling session (which also scans).
 
 This file does NOT modify the original RemedyAgent — it wraps/composes it.
 """
@@ -16,7 +13,7 @@ This file does NOT modify the original RemedyAgent — it wraps/composes it.
 from __future__ import annotations
 
 import time
-from typing import List, Optional
+from typing import Optional
 
 from rich.console import Console
 
@@ -27,6 +24,7 @@ from schemas import (
     RemedyInput,
     RemediationAttempt,
     ReviewInput,
+    ToolVerdict,
     Vulnerability,
 )
 
@@ -35,10 +33,10 @@ console = Console()
 
 class RemedyAgentV2:
     """
-    V2 Remedy agent: fix → Review+QA approval → scan.
+    V2 Remedy agent: plan → consult Review+QA → apply fix → scan.
 
-    Wraps the existing RemedyAgent for fix generation and adds a
-    ReviewAgentV2 call before running the verification scan.
+    Wraps the existing RemedyAgent for fix planning and execution,
+    and ReviewAgentV2 for pre-apply consultation.
     """
 
     def __init__(
@@ -54,26 +52,25 @@ class RemedyAgentV2:
         input_data: RemedyInput,
     ) -> tuple[RemediationAttempt, Optional[PreApprovalResult]]:
         """
-        Generate a fix, get approval, then scan.
+        Plan a fix, consult Review+QA, then apply with feedback.
 
         Returns:
             (remediation_attempt, pre_approval_result)
-            - pre_approval_result is None only when the fix generation itself
-              errors out before reaching the review stage.
+            - pre_approval_result is None only when plan generation errors out.
         """
         vuln = input_data.vulnerability
         vid = vuln.id
         start = time.time()
 
-        # ── Step 1: Generate & apply the fix (tool-calling LLM) ──────
+        # ── Step 1: Generate fix plan (no execution) ──────────────
         console.print(
-            f"[bold cyan]  [{vid}] V2 Remedy: generating fix "
+            f"[bold cyan]  [{vid}] V2 Remedy: planning fix "
             f"(attempt {input_data.attempt_number})[/bold cyan]"
         )
         try:
-            attempt = self.remedy_agent.process(input_data)
+            plan_text = self.remedy_agent.plan_fix(input_data)
         except Exception as exc:
-            console.print(f"[red]  [{vid}] Remedy generation error: {exc}[/red]")
+            console.print(f"[red]  [{vid}] Plan generation error: {exc}[/red]")
             return (
                 RemediationAttempt(
                     finding_id=vid,
@@ -83,39 +80,67 @@ class RemedyAgentV2:
                 None,
             )
 
-        # ── Step 2: Call Review → QA for pre-scan approval ───────────
+        # ── Step 2: Consult Review+QA on the plan ─────────────────
         console.print(
-            f"[bold cyan]  [{vid}] V2 Remedy: requesting Review+QA approval[/bold cyan]"
+            f"[bold cyan]  [{vid}] V2 Remedy: consulting Review+QA on plan[/bold cyan]"
+        )
+        stub_attempt = RemediationAttempt(
+            finding_id=vid,
+            attempt_number=input_data.attempt_number,
+            llm_verdict=ToolVerdict(message=plan_text, resolved=False),
         )
         review_input = ReviewInput(
             vulnerability=vuln,
-            remediation_attempt=attempt,
+            remediation_attempt=stub_attempt,
             triage_decision=input_data.triage_decision,
             previous_verdicts=input_data.previous_review_verdicts,
         )
-        approval = self.review_v2.process(review_input, attempt=input_data.attempt_number)
+        advisory = self.review_v2.process(
+            review_input, attempt=input_data.attempt_number
+        )
 
-        if not approval.approved:
-            console.print(
-                f"[yellow]  [{vid}] V2 Remedy: pre-approval REJECTED — "
-                f"{approval.rejection_reason or 'no reason'}[/yellow]"
+        # ── Step 3: Build feedback string from advisory ───────────
+        feedback_parts = []
+        if input_data.review_feedback:
+            feedback_parts.append(input_data.review_feedback)
+        feedback_parts.append(f"YOUR PROPOSED PLAN: {plan_text[:500]}")
+
+        rv = advisory.review_verdict
+        if rv.feedback:
+            feedback_parts.append(f"Review feedback: {rv.feedback}")
+        if rv.suggested_improvements:
+            feedback_parts.append(
+                "Review suggestions: " + "; ".join(rv.suggested_improvements)
             )
-            attempt.scan_passed = False
-            attempt.success = False
-            attempt.duration = time.time() - start
-            return attempt, approval
+        if rv.concerns:
+            feedback_parts.append(
+                "Review concerns: " + "; ".join(rv.concerns)
+            )
+        if advisory.qa_result and advisory.qa_result.verdict_reason:
+            feedback_parts.append(
+                f"QA safety opinion: {advisory.qa_result.verdict_reason}"
+            )
 
-        # ── Step 3: Verification scan ────────────────────────────────
-        console.print(f"[bold cyan]  [{vid}] V2 Remedy: running verification scan[/bold cyan]")
-        scan_result = self.remedy_agent._tool_scan(vuln)
-        attempt.scan_passed = bool(scan_result.get("pass"))
-        attempt.scan_output = scan_result.get("summary") or scan_result.get("raw")
-        attempt.success = attempt.scan_passed
+        enriched_input = input_data.model_copy(
+            update={"review_feedback": " | ".join(feedback_parts)}
+        )
 
-        if attempt.scan_passed:
-            console.print(f"[green]  [{vid}] V2 Remedy: scan PASSED[/green]")
-        else:
-            console.print(f"[yellow]  [{vid}] V2 Remedy: scan FAILED[/yellow]")
+        # ── Step 4: Apply the fix with feedback (tool-calling + scan) ──
+        console.print(
+            f"[bold cyan]  [{vid}] V2 Remedy: applying fix[/bold cyan]"
+        )
+        try:
+            attempt = self.remedy_agent.process(enriched_input)
+        except Exception as exc:
+            console.print(f"[red]  [{vid}] Remedy execution error: {exc}[/red]")
+            return (
+                RemediationAttempt(
+                    finding_id=vid,
+                    attempt_number=input_data.attempt_number,
+                    error_summary=str(exc),
+                ),
+                advisory,
+            )
 
         attempt.duration = time.time() - start
-        return attempt, approval
+        return attempt, advisory
