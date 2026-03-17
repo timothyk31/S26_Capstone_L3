@@ -156,6 +156,15 @@ class PipelineV2:
             if approval is not None:
                 previous_verdicts.append(approval.review_verdict)
 
+            # If SSH is down, retrying won't help — break immediately
+            scan_out = remediation.scan_output or ""
+            if "SSH_UNREACHABLE" in scan_out:
+                console.print(
+                    f"[red]  [{vid}] SSH connection lost — skipping retries[/red]"
+                )
+                review_feedback = "SSH connection lost. Cannot verify or retry."
+                break
+
             # Build feedback for the next attempt
             if approval is not None and not approval.approved:
                 review_feedback = approval.rejection_reason or "Fix rejected by Review/QA."

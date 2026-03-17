@@ -151,15 +151,20 @@ class RemedyAgent:
         attempt.execution_details = session_result["execution_details"]
         attempt.llm_verdict = ToolVerdict(message=session_result.get("final_message", ""), resolved=False)
 
-        # Always run an authoritative post-session scan so that scan_passed
-        # reflects the final system state after ALL changes are applied.
-        # (last_scan_result from the LLM's session may be stale — e.g. the LLM
-        # scanned before completing the fix, got pass=False, then kept working
-        # but never scanned again.  Using that stale result would cause an
-        # unnecessary retry even when the fix was actually applied.)
-        scan_result = self._tool_scan(vuln)
-        attempt.scan_passed = bool(scan_result.get("pass"))
-        attempt.scan_output = scan_result.get("summary") or scan_result.get("raw")
+        # Quick SSH health check before running the authoritative scan.
+        # If SSH is down (e.g. a prior fix broke sshd/firewall), skip the
+        # scan and report immediately instead of waiting for a 120s timeout.
+        ssh_check = self.executor.run_command("echo ok")
+        if not ssh_check.success:
+            attempt.scan_passed = False
+            attempt.scan_output = "SSH_UNREACHABLE: Cannot verify fix — SSH connection failed."
+            attempt.error_summary = "SSH connection lost after applying fix."
+        else:
+            # Authoritative post-session scan: always run so scan_passed
+            # reflects the final system state after ALL changes are applied.
+            scan_result = self._tool_scan(vuln)
+            attempt.scan_passed = bool(scan_result.get("pass"))
+            attempt.scan_output = scan_result.get("summary") or scan_result.get("raw")
 
         attempt.success = attempt.scan_passed
         attempt.llm_verdict.resolved = attempt.success
@@ -303,7 +308,7 @@ class RemedyAgent:
 
         lines.extend([
             "",
-            "Return tool calls as needed. End by calling scan.",
+            "Return tool calls as needed. A verification scan runs automatically after your session.",
         ])
         return "\n".join(lines)
 
@@ -375,13 +380,14 @@ class RemedyAgent:
             "2. Identify the exact key/value that needs changing.\n"
             "3. Use write_file for config changes (avoids shell quoting issues) or run_cmd for sed/systemctl.\n"
             "4. Verify with run_cmd (e.g. grep) that the change took effect.\n"
-            "5. Call scan to confirm the fix.\n"
+            "5. A verification scan runs automatically after your session — do not call scan yourself.\n"
             "RULES:\n"
             "- One command at a time. Do NOT chain with && or ;\n"
             "- This is Rocky Linux/RHEL. Use dnf (not apt). Use systemctl (not service).\n"
             "- Do NOT duplicate config lines. If a key already exists, modify it in-place with sed.\n"
             "- If a key is commented out (# minlen = 8), uncomment and set the correct value.\n"
-            "- stderr may contain SSH banners — ignore them. Check exit_code and stdout for results."
+            "- stderr may contain SSH banners — ignore them. Check exit_code and stdout for results.\n"
+            "- CRITICAL: Do NOT modify SSH config, sshd_config, firewall rules, or SELinux in ways that could block SSH access. Do not disable or mask sshd. The pipeline requires SSH to operate."
         )
 
         messages: List[Dict[str, Any]] = [

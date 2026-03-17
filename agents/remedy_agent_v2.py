@@ -99,31 +99,38 @@ class RemedyAgentV2:
             review_input, attempt=input_data.attempt_number
         )
 
-        # ── Step 3: Build feedback string from advisory ───────────
-        feedback_parts = []
-        if input_data.review_feedback:
-            feedback_parts.append(input_data.review_feedback)
-        feedback_parts.append(f"YOUR PROPOSED PLAN: {plan_text[:500]}")
+        # ── Step 3: Only inject feedback if advisory FAILED ───────
+        if not advisory.approved:
+            console.print(
+                f"[yellow]  [{vid}] V2 Remedy: advisory rejected — "
+                f"injecting feedback[/yellow]"
+            )
+            feedback_parts = []
+            if input_data.review_feedback:
+                feedback_parts.append(input_data.review_feedback)
+            feedback_parts.append(f"YOUR PROPOSED PLAN: {plan_text[:500]}")
 
-        rv = advisory.review_verdict
-        if rv.feedback:
-            feedback_parts.append(f"Review feedback: {rv.feedback}")
-        if rv.suggested_improvements:
-            feedback_parts.append(
-                "Review suggestions: " + "; ".join(rv.suggested_improvements)
-            )
-        if rv.concerns:
-            feedback_parts.append(
-                "Review concerns: " + "; ".join(rv.concerns)
-            )
-        if advisory.qa_result and advisory.qa_result.verdict_reason:
-            feedback_parts.append(
-                f"QA safety opinion: {advisory.qa_result.verdict_reason}"
-            )
+            rv = advisory.review_verdict
+            if rv.feedback:
+                feedback_parts.append(f"Review feedback: {rv.feedback}")
+            if rv.suggested_improvements:
+                feedback_parts.append(
+                    "Review suggestions: " + "; ".join(rv.suggested_improvements)
+                )
+            if rv.concerns:
+                feedback_parts.append(
+                    "Review concerns: " + "; ".join(rv.concerns)
+                )
+            if advisory.qa_result and advisory.qa_result.verdict_reason:
+                feedback_parts.append(
+                    f"QA safety opinion: {advisory.qa_result.verdict_reason}"
+                )
 
-        enriched_input = input_data.model_copy(
-            update={"review_feedback": " | ".join(feedback_parts)}
-        )
+            enriched_input = input_data.model_copy(
+                update={"review_feedback": " | ".join(feedback_parts)}
+            )
+        else:
+            enriched_input = input_data
 
         # ── Step 4: Apply the fix with feedback (tool-calling + scan) ──
         console.print(
