@@ -2,7 +2,7 @@
 #
 # Purpose: Execute remediation using LLM with tool-calling interface
 # Position in pipeline: SECOND stage (after Triage approval)
-# Tools: run_cmd, write_file, read_file, scan (exactly 4 per spec)
+# Tools: run_cmd, write_file, read_file (exactly 3 — scan is run automatically post-session)
 # Has self-loop: Retries on scan failure with feedback
 #
 # Input: RemedyInput (vulnerability, triage_decision, attempt_number, previous_attempts, review_feedback)
@@ -13,7 +13,7 @@
 # 2. LLM generates remediation commands via tool calling
 # 3. Execute commands via run_cmd tool (uses ShellCommandExecutor)
 # 4. Write/read files as needed
-# 5. Call scan tool to verify fix
+# 5. Authoritative scan runs automatically after session to verify fix
 # 6. Self-loop up to max attempts if scan fails
 # 7. Track all execution details
 #
@@ -36,7 +36,7 @@
 #             {"type": "function", "function": {"name": "run_cmd", ...}},
 #             {"type": "function", "function": {"name": "write_file", ...}},
 #             {"type": "function", "function": {"name": "read_file", ...}},
-#             {"type": "function", "function": {"name": "scan", ...}}
+#             (scan runs automatically post-session — not exposed as a tool)
 #         ]
 #
 #     def process(self, input_data: RemedyInput) -> RemediationAttempt:
@@ -76,7 +76,7 @@ def _get_config():
 class RemedyAgent:
     """
     Remedy Agent (Stage 2)
-    Tools (exactly 4): run_cmd, read_file, write_file, scan
+    Tools (exactly 3): run_cmd, read_file, write_file (scan runs automatically post-session)
     Self-loop behavior is typically orchestrated by workflow, but this class can support max attempts too.
     """
 
@@ -252,14 +252,14 @@ class RemedyAgent:
 
         lines = [
             "You are the Remedy agent remediating ONE OpenSCAP finding on Rocky Linux 10.",
-            "You MUST use ONLY the provided tools: run_cmd, read_file, write_file, scan.",
+            "You MUST use ONLY the provided tools: run_cmd, read_file, write_file.",
             "Rules:",
             "- Use run_cmd for EXACTLY ONE shell command at a time. Do NOT chain with && ; or multiline scripts.",
             "- Commands run as root. Do not prefix with sudo.",
             "- ALWAYS use read_file to inspect the target config file BEFORE modifying it.",
             "- Do NOT append duplicate lines. Use sed -i to modify existing values in-place.",
             "- If a line is commented (e.g. '# minlen = 8'), uncomment it and set the value.",
-            "- Prefer minimal, reversible changes and verify with scan at the end.",
+            "- Prefer minimal, reversible changes. A verification scan runs automatically after your session.",
             "",
             "FINDING:",
             f"- Title: {vuln.title}",
@@ -357,14 +357,6 @@ class RemedyAgent:
                     },
                 },
             },
-            {
-                "type": "function",
-                "function": {
-                    "name": "scan",
-                    "description": "Run a focused scan for this finding and return pass/fail.",
-                    "parameters": {"type": "object", "properties": {}, "additionalProperties": False},
-                },
-            },
         ]
 
     # -------------------------
@@ -380,7 +372,7 @@ class RemedyAgent:
             "2. Identify the exact key/value that needs changing.\n"
             "3. Use write_file for config changes (avoids shell quoting issues) or run_cmd for sed/systemctl.\n"
             "4. Verify with run_cmd (e.g. grep) that the change took effect.\n"
-            "5. A verification scan runs automatically after your session — do not call scan yourself.\n"
+            "5. Once the fix is applied, stop — a verification scan runs automatically.\n"
             "RULES:\n"
             "- One command at a time. Do NOT chain with && or ;\n"
             "- This is Rocky Linux/RHEL. Use dnf (not apt). Use systemctl (not service).\n"
@@ -401,7 +393,6 @@ class RemedyAgent:
         files_modified: List[str] = []
         execution_details: List[RunCommandResult] = []
         final_message: str = ""
-        last_scan_result: Optional[Dict[str, Any]] = None  # Track LLM-initiated scans
         usage_records: List[Dict[str, Any]] = []
 
         tool_calls_used = 0
@@ -494,10 +485,6 @@ class RemedyAgent:
                     execution_details.append(result)
                     payload = result.model_dump()
 
-                elif name == "scan":
-                    scan_payload = self._tool_scan(vuln)
-                    last_scan_result = scan_payload  # Cache so process() can reuse
-                    payload = scan_payload
                 else:
                     payload = {"error": f"Unknown tool {name}"}
 
@@ -523,7 +510,6 @@ class RemedyAgent:
             "files_modified": files_modified,
             "execution_details": execution_details,
             "final_message": final_message,
-            "last_scan_result": last_scan_result,
             "usage": usage_records,
         }
 
