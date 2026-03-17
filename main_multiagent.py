@@ -263,8 +263,8 @@ def parse_args() -> argparse.Namespace:
                         help="Minimum severity to process (default: 2)")
     pipe_g.add_argument("--max-vulns", type=int, default=None,
                         help="Cap the number of vulnerabilities to process")
-    pipe_g.add_argument("--max-remedy-attempts", type=int, default=3,
-                        help="Max remedy retries per finding (default: 3)")
+    pipe_g.add_argument("--max-remedy-attempts", type=int, default=2,
+                        help="Max remedy retries per finding (default: 2)")
 
     # ── Agents ───
     agent_g = p.add_argument_group("Agent options")
@@ -278,8 +278,8 @@ def parse_args() -> argparse.Namespace:
 
     # ── Concurrency ───
     conc = p.add_argument_group("Concurrency")
-    conc.add_argument("--workers", type=int, default=1,
-                      help="Number of concurrent pipeline workers (default: 1)")
+    conc.add_argument("--workers", type=int, default=2,
+                      help="Number of concurrent pipeline workers (default: 2)")
 
     # ── Output ───
     out = p.add_argument_group("Output")
@@ -463,7 +463,8 @@ def main() -> int:
     transcript_dir.mkdir(parents=True, exist_ok=True)
 
     triage_agent = TriageAgent(
-        mode=args.triage_mode, lenient=args.lenient_triage,
+        mode=args.triage_mode,
+        lenient=True,
         transcript_dir=transcript_dir / "triage",
     )
 

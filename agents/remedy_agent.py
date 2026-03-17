@@ -277,29 +277,29 @@ class RemedyAgent:
             lines.extend(["", "REVIEW FEEDBACK (apply improvements):", review_feedback.strip()[:600]])
 
         if previous_review_verdicts:
-            lines.extend(["", "STRUCTURED REVIEW HISTORY (address these specific issues):"])
-            for i, rv in enumerate(previous_review_verdicts[-3:], 1):
+            lines.extend(["", "STRUCTURED REVIEW HISTORY (most recent issues to address):"])
+            for i, rv in enumerate(previous_review_verdicts[-2:], 1):
                 lines.append(f"  Review #{i}: approve={rv.approve}, score={rv.security_score}")
                 if rv.concerns:
-                    lines.append(f"    Concerns: {'; '.join(rv.concerns[:5])}")
+                    lines.append(f"    Concerns: {'; '.join(rv.concerns[:3])}")
                 if rv.suggested_improvements:
-                    lines.append(f"    Required improvements: {'; '.join(rv.suggested_improvements[:5])}")
+                    lines.append(f"    Required improvements: {'; '.join(rv.suggested_improvements[:3])}")
                 if rv.feedback:
-                    lines.append(f"    Feedback: {rv.feedback[:200]}")
+                    lines.append(f"    Feedback: {rv.feedback[:160]}")
 
         if previous_attempts:
             lines.append("")
-            lines.append(f"PREVIOUS ATTEMPTS ({len(previous_attempts)}):")
-            for att in previous_attempts[-3:]:
+            lines.append(f"PREVIOUS ATTEMPTS (up to 2 most recent of {len(previous_attempts)}):")
+            for att in previous_attempts[-2:]:
                 lines.append(f"* Attempt {att.attempt_number}: success={att.success} scan_passed={att.scan_passed}")
                 if att.commands_executed:
-                    lines.append("  Commands:")
-                    for cmd in att.commands_executed[-4:]:
+                    lines.append("  Commands (last 2):")
+                    for cmd in att.commands_executed[-2:]:
                         lines.append(f"    - {cmd}")
                 if att.error_summary:
-                    lines.append(f"  Error: {att.error_summary[:300]}")
+                    lines.append(f"  Error: {att.error_summary[:200]}")
                 if att.scan_output:
-                    lines.append(f"  Scan output: {str(att.scan_output)[:300]}")
+                    lines.append(f"  Scan output: {str(att.scan_output)[:200]}")
 
         lines.extend([
             "",

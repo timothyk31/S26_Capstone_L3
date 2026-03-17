@@ -181,21 +181,24 @@ def _vuln_text_blob(v: Vulnerability) -> str:
 
 def _build_prompt(v: Vulnerability, *, lenient: bool = False) -> str:
     schema_block = (
-        "Classify this OpenSCAP finding into exactly one category:\n"
-        "safe_to_remediate, requires_human_review, too_dangerous_to_remediate.\n\n"
+        "You are a strict JSON-only classifier for Rocky/RHEL 9 OpenSCAP STIG findings.\n"
+        "You MUST return exactly ONE JSON object and NOTHING else (no analysis, no markdown, "
+        "no code fences, no extra keys).\n\n"
+        "Classify this finding into exactly one category:\n"
+        "  safe_to_remediate, requires_human_review, or too_dangerous_to_remediate.\n\n"
         "Return ONLY JSON for this schema:\n"
         "{\n"
-        '  "finding_id": string,\n'
-        '  "rule_id": string,\n'
-        '  "category": "safe_to_remediate"|"requires_human_review"|"too_dangerous_to_remediate",\n'
-        '  "confidence": number between 0 and 1,\n'
-        '  "rationale": string,\n'
-        '  "risk_factors": [string,...],\n'
-        '  "safe_next_steps": [string,...],\n'
-        '  "requires_reboot": boolean,\n'
-        '  "touches_authn_authz": boolean,\n'
-        '  "touches_networking": boolean,\n'
-        '  "touches_filesystems": boolean\n'
+        '  \"finding_id\": string,\n'
+        '  \"rule_id\": string,\n'
+        '  \"category\": \"safe_to_remediate\"|\"requires_human_review\"|\"too_dangerous_to_remediate\",\n'
+        '  \"confidence\": number between 0 and 1,\n'
+        '  \"rationale\": string,\n'
+        '  \"risk_factors\": [string,...],\n'
+        '  \"safe_next_steps\": [string,...],\n'
+        '  \"requires_reboot\": boolean,\n'
+        '  \"touches_authn_authz\": boolean,\n'
+        '  \"touches_networking\": boolean,\n'
+        '  \"touches_filesystems\": boolean\n'
         "}\n\n"
         "Finding:\n"
         f"- finding_id: {v.id}\n"
@@ -217,6 +220,7 @@ def _build_prompt(v: Vulnerability, *, lenient: bool = False) -> str:
             "hardening patterns, including password policy, SSH ciphers, session timeouts, and similar.\n"
             "- Mark safe_to_remediate for package installs, service enablement, "
             "sysctl persistence, audit rules, and file permissions.\n"
+            "Remember: OUTPUT MUST BE VALID JSON MATCHING THE SCHEMA ABOVE. DO NOT ADD ANY OTHER TEXT.\n"
         )
     else:
         policy = (
@@ -229,6 +233,7 @@ def _build_prompt(v: Vulnerability, *, lenient: bool = False) -> str:
             "(pwquality, chage, password length, password age, password complexity, lockout, etc.).\n"
             "- Mark safe_to_remediate for low-risk package installs, service enablement, "
             "sysctl persistence that is unlikely to lock out access.\n"
+            "Remember: OUTPUT MUST BE VALID JSON MATCHING THE SCHEMA ABOVE. DO NOT ADD ANY OTHER TEXT.\n"
         )
 
     return schema_block + policy

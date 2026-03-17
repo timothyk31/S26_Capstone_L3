@@ -71,11 +71,11 @@ def _build_qa_prompt(input_data: QAInput) -> str:
     if attempt.llm_verdict:
         lines.append(f"- LLM verdict: {attempt.llm_verdict.message}")
     if attempt.execution_details:
-        lines.append("- Execution details (last few):")
-        for d in attempt.execution_details[-5:]:
+        lines.append("- Execution details (last 3 commands):")
+        for d in attempt.execution_details[-3:]:
             lines.append(f"  - {d.command} -> exit_code={d.exit_code}, success={d.success}")
             if d.stderr and d.stderr.strip():
-                lines.append(f"    stderr: {d.stderr[:200]}")
+                lines.append(f"    stderr: {d.stderr[:160]}")
 
     lines.extend([
         "",
