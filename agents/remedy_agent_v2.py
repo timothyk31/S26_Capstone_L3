@@ -105,32 +105,36 @@ class RemedyAgentV2:
                 f"[yellow]  [{vid}] V2 Remedy: advisory rejected — "
                 f"injecting feedback[/yellow]"
             )
-            feedback_parts = []
-            if input_data.review_feedback:
-                feedback_parts.append(input_data.review_feedback)
-            feedback_parts.append(f"YOUR PROPOSED PLAN: {plan_text[:500]}")
+            # Prior feedback is already carried in previous_review_verdicts —
+            # only include current-round rejection details to avoid duplication.
+            feedback_parts = [f"YOUR PROPOSED PLAN WAS REJECTED: {plan_text[:400]}"]
 
             rv = advisory.review_verdict
             if rv.feedback:
-                feedback_parts.append(f"Review feedback: {rv.feedback}")
+                feedback_parts.append(f"Review: {rv.feedback}")
             if rv.suggested_improvements:
                 feedback_parts.append(
-                    "Review suggestions: " + "; ".join(rv.suggested_improvements)
+                    "Required: " + "; ".join(rv.suggested_improvements)
                 )
             if rv.concerns:
                 feedback_parts.append(
-                    "Review concerns: " + "; ".join(rv.concerns)
+                    "Concerns: " + "; ".join(rv.concerns)
                 )
             if advisory.qa_result and advisory.qa_result.verdict_reason:
                 feedback_parts.append(
-                    f"QA safety opinion: {advisory.qa_result.verdict_reason}"
+                    f"QA: {advisory.qa_result.verdict_reason}"
                 )
 
             enriched_input = input_data.model_copy(
-                update={"review_feedback": " | ".join(feedback_parts)}
+                update={
+                    "review_feedback": "\n".join(feedback_parts),
+                    "plan_text": plan_text,
+                }
             )
         else:
-            enriched_input = input_data
+            enriched_input = input_data.model_copy(
+                update={"plan_text": plan_text}
+            )
 
         # ── Step 4: Apply the fix with feedback (tool-calling + scan) ──
         console.print(

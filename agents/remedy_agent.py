@@ -137,6 +137,8 @@ class RemedyAgent:
             previous_attempts=input_data.previous_attempts,
             review_feedback=input_data.review_feedback,
             previous_review_verdicts=input_data.previous_review_verdicts,
+            attempt_number=input_data.attempt_number,
+            plan_text=input_data.plan_text,
         )
 
         session_label = f"{vuln.id}_attempt{input_data.attempt_number}"
@@ -151,23 +153,11 @@ class RemedyAgent:
         attempt.execution_details = session_result["execution_details"]
         attempt.llm_verdict = ToolVerdict(message=session_result.get("final_message", ""), resolved=False)
 
-        # Quick SSH health check before running the authoritative scan.
-        # If SSH is down (e.g. a prior fix broke sshd/firewall), skip the
-        # scan and report immediately instead of waiting for a 120s timeout.
-        ssh_check = self.executor.run_command("echo ok")
-        if not ssh_check.success:
-            attempt.scan_passed = False
-            attempt.scan_output = "SSH_UNREACHABLE: Cannot verify fix — SSH connection failed."
-            attempt.error_summary = "SSH connection lost after applying fix."
-        else:
-            # Authoritative post-session scan: always run so scan_passed
-            # reflects the final system state after ALL changes are applied.
-            scan_result = self._tool_scan(vuln)
-            attempt.scan_passed = bool(scan_result.get("pass"))
-            attempt.scan_output = scan_result.get("summary") or scan_result.get("raw")
-
-        attempt.success = attempt.scan_passed
-        attempt.llm_verdict.resolved = attempt.success
+        # Scan is NOT run here — batch-then-verify handles scanning
+        # after all findings in a round are remediated.
+        attempt.scan_passed = False
+        attempt.scan_output = None
+        attempt.success = False
 
         attempt.duration = time.time() - start
 
@@ -195,29 +185,25 @@ class RemedyAgent:
         Returns a text description of the planned remediation (no tools called).
         Used by RemedyAgentV2 to consult Review+QA before applying.
         """
-        vuln = input_data.vulnerability
-        rule_id = vuln.oval_id or vuln.rule or vuln.title
-        rule_name = rule_id.replace("xccdf_org.ssgproject.content_rule_", "")
-
-        prompt = (
-            f"You are planning a remediation for ONE OpenSCAP finding on Rocky Linux.\n"
-            f"DO NOT execute anything. Only DESCRIBE your proposed fix.\n\n"
-            f"FINDING:\n"
-            f"- Title: {vuln.title}\n"
-            f"- Rule: {rule_name}\n"
-            f"- Severity: {vuln.severity}\n"
-            f"- Description: {(vuln.description or '(none)')[:400]}\n"
-            f"- Recommendation: {(vuln.recommendation or '(none)')[:400]}\n\n"
-            f"Describe:\n"
-            f"1. What config files you would modify\n"
-            f"2. What commands you would run\n"
-            f"3. Why this approach is correct\n"
-            f"4. Any risks or side effects\n"
+        base_prompt = self._build_agent_prompt(
+            vuln=input_data.vulnerability,
+            triage_reason=input_data.triage_decision.reason,
+            previous_attempts=input_data.previous_attempts,
+            review_feedback=input_data.review_feedback,
+            previous_review_verdicts=input_data.previous_review_verdicts,
+            attempt_number=input_data.attempt_number,
         )
-        if input_data.review_feedback:
-            prompt += f"\nPREVIOUS FEEDBACK (address this):\n{input_data.review_feedback[:600]}\n"
-        if input_data.previous_attempts:
-            prompt += f"\nPREVIOUS ATTEMPTS FAILED ({len(input_data.previous_attempts)}). Try a different approach.\n"
+
+        planning_preamble = (
+            "DO NOT execute anything. Only DESCRIBE your proposed fix.\n"
+            "Describe:\n"
+            "1. What config files you would modify\n"
+            "2. What commands you would run\n"
+            "3. Why this approach is correct\n"
+            "4. Any risks or side effects\n\n"
+        )
+
+        prompt = planning_preamble + base_prompt
 
         payload = {
             "model": self.model_name,
@@ -244,6 +230,8 @@ class RemedyAgent:
         previous_attempts: List[RemediationAttempt],
         review_feedback: Optional[str],
         previous_review_verdicts: Optional[List[ReviewVerdict]] = None,
+        attempt_number: int = 1,
+        plan_text: Optional[str] = None,
     ) -> str:
         rule_id = vuln.oval_id or vuln.rule or vuln.title
         rule_name = rule_id.replace("xccdf_org.ssgproject.content_rule_", "")
@@ -278,8 +266,15 @@ class RemedyAgent:
         if recommendation:
             lines.append(f"- Recommendation: {recommendation[:600]}")
 
+        if plan_text:
+            lines.extend([
+                "",
+                "APPROVED FIX PLAN (follow this plan):",
+                plan_text.strip()[:1200],
+            ])
+
         if review_feedback:
-            lines.extend(["", "REVIEW FEEDBACK (apply improvements):", review_feedback.strip()[:600]])
+            lines.extend(["", "REVIEW FEEDBACK (apply improvements):", review_feedback.strip()[:900]])
 
         if previous_review_verdicts:
             lines.extend(["", "STRUCTURED REVIEW HISTORY (address these specific issues):"])
@@ -304,7 +299,22 @@ class RemedyAgent:
                 if att.error_summary:
                     lines.append(f"  Error: {att.error_summary[:300]}")
                 if att.scan_output:
-                    lines.append(f"  Scan output: {str(att.scan_output)[:300]}")
+                    lines.append(f"  Scan output: {str(att.scan_output)[:900]}")
+
+        if previous_attempts and attempt_number >= 2:
+            all_prior_cmds: List[str] = []
+            for att in previous_attempts:
+                all_prior_cmds.extend(att.commands_executed[-4:])
+            if all_prior_cmds:
+                lines.extend([
+                    "",
+                    f"STRATEGY CHANGE REQUIRED (attempt {attempt_number}):",
+                    "You MUST use a DIFFERENT approach from all prior attempts.",
+                    "Do NOT repeat any of these previously-tried commands:",
+                ])
+                for cmd in all_prior_cmds[-8:]:
+                    lines.append(f"  AVOID: {cmd}")
+                lines.append("If direct config-file edits failed, try: authselect, sysctl, systemctl, or package reinstall.")
 
         lines.extend([
             "",

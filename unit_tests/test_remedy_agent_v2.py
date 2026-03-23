@@ -1,4 +1,4 @@
-"""Unit tests for RemedyAgentV2 (Remedy → Review+QA → scan)."""
+"""Unit tests for RemedyAgentV2 (Plan → Review+QA → Apply)."""
 
 import pytest
 from unittest.mock import MagicMock, patch, PropertyMock
@@ -21,7 +21,7 @@ from schemas import (
 @pytest.fixture
 def vulnerability():
     return Vulnerability(
-        id="openscap_020",
+        id="auditd_audispd_syslog_plugin_activated",
         title="Ensure auditd is enabled",
         severity="3",
         host="10.0.0.1",
@@ -31,7 +31,7 @@ def vulnerability():
 @pytest.fixture
 def triage_decision():
     return TriageDecision(
-        finding_id="openscap_020",
+        finding_id="auditd_audispd_syslog_plugin_activated",
         should_remediate=True,
         risk_level="low",
         reason="Service enablement is safe.",
@@ -48,21 +48,17 @@ def remedy_input(vulnerability, triage_decision):
 
 
 @pytest.fixture
-def successful_attempt():
-    return RemediationAttempt(
-        finding_id="openscap_020",
+def mock_remedy_agent():
+    agent = MagicMock()
+    agent.plan_fix.return_value = "Enable and start auditd service via systemctl."
+    # process() no longer runs scan — always returns scan_passed=False
+    agent.process.return_value = RemediationAttempt(
+        finding_id="auditd_audispd_syslog_plugin_activated",
         attempt_number=1,
         commands_executed=["systemctl enable auditd", "systemctl start auditd"],
-        scan_passed=False,  # Scan not run yet at this point
+        scan_passed=False,
         success=False,
     )
-
-
-@pytest.fixture
-def mock_remedy_agent(successful_attempt):
-    agent = MagicMock()
-    agent.process.return_value = successful_attempt
-    agent._tool_scan.return_value = {"pass": True, "summary": "Rule passed"}
     return agent
 
 
@@ -85,44 +81,44 @@ class TestRemedyAgentV2:
     def test_full_success_path(
         self, agent, mock_remedy_agent, mock_review_v2, remedy_input
     ):
-        """Fix generated → approved → scan passes → success."""
+        """Plan → approved → process succeeds (no scan in process)."""
         mock_review_v2.process.return_value = PreApprovalResult(
             review_verdict=ReviewVerdict(
-                finding_id="openscap_020",
+                finding_id="auditd_audispd_syslog_plugin_activated",
                 is_optimal=True,
                 approve=True,
                 security_score=9,
             ),
             qa_result=QAResult(
-                finding_id="openscap_020",
+                finding_id="auditd_audispd_syslog_plugin_activated",
                 safe=True,
                 verdict_reason="OK",
                 recommendation="Approve",
             ),
             approved=True,
         )
-        mock_remedy_agent._tool_scan.return_value = {
-            "pass": True,
-            "summary": "openscap_020: pass",
-        }
 
         attempt, approval = agent.process(remedy_input)
 
         assert approval is not None
         assert approval.approved is True
-        assert attempt.scan_passed is True
-        assert attempt.success is True
+        # scan_passed is always False now (batch-then-verify sets it later)
+        assert attempt.scan_passed is False
+        assert attempt.success is False
+        mock_remedy_agent.plan_fix.assert_called_once()
         mock_remedy_agent.process.assert_called_once()
         mock_review_v2.process.assert_called_once()
-        mock_remedy_agent._tool_scan.assert_called_once()
+        # Verify plan_text was passed through to process
+        call_args = mock_remedy_agent.process.call_args[0][0]
+        assert call_args.plan_text == "Enable and start auditd service via systemctl."
 
-    def test_approval_rejected_no_scan(
+    def test_approval_rejected_injects_feedback(
         self, agent, mock_remedy_agent, mock_review_v2, remedy_input
     ):
-        """Fix generated → rejected → NO scan should run."""
+        """Plan → rejected → feedback injected into process call."""
         mock_review_v2.process.return_value = PreApprovalResult(
             review_verdict=ReviewVerdict(
-                finding_id="openscap_020",
+                finding_id="auditd_audispd_syslog_plugin_activated",
                 is_optimal=False,
                 approve=False,
                 feedback="Fix is harmful.",
@@ -135,45 +131,18 @@ class TestRemedyAgentV2:
 
         assert approval is not None
         assert approval.approved is False
-        assert attempt.scan_passed is False
-        assert attempt.success is False
-        mock_remedy_agent._tool_scan.assert_not_called()
+        # process() still runs even when rejected (with feedback injected)
+        mock_remedy_agent.process.assert_called_once()
+        call_args = mock_remedy_agent.process.call_args[0][0]
+        assert call_args.review_feedback is not None
+        assert "REJECTED" in call_args.review_feedback
+        assert call_args.plan_text is not None
 
-    def test_approved_but_scan_fails(
+    def test_plan_generation_error(
         self, agent, mock_remedy_agent, mock_review_v2, remedy_input
     ):
-        """Fix generated → approved → scan FAILS → success=False."""
-        mock_review_v2.process.return_value = PreApprovalResult(
-            review_verdict=ReviewVerdict(
-                finding_id="openscap_020",
-                is_optimal=True,
-                approve=True,
-                security_score=8,
-            ),
-            qa_result=QAResult(
-                finding_id="openscap_020",
-                safe=True,
-                verdict_reason="OK",
-                recommendation="Approve",
-            ),
-            approved=True,
-        )
-        mock_remedy_agent._tool_scan.return_value = {
-            "pass": False,
-            "summary": "openscap_020: fail",
-        }
-
-        attempt, approval = agent.process(remedy_input)
-
-        assert approval.approved is True
-        assert attempt.scan_passed is False
-        assert attempt.success is False
-
-    def test_remedy_generation_error(
-        self, agent, mock_remedy_agent, mock_review_v2, remedy_input
-    ):
-        """Remedy agent crashes → return error attempt, no approval."""
-        mock_remedy_agent.process.side_effect = RuntimeError("LLM connection error")
+        """plan_fix crashes → return error attempt, no approval."""
+        mock_remedy_agent.plan_fix.side_effect = RuntimeError("LLM connection error")
 
         attempt, approval = agent.process(remedy_input)
 
@@ -181,29 +150,51 @@ class TestRemedyAgentV2:
         assert attempt.error_summary == "LLM connection error"
         assert attempt.success is False
         mock_review_v2.process.assert_not_called()
-        mock_remedy_agent._tool_scan.assert_not_called()
+        mock_remedy_agent.process.assert_not_called()
 
-    def test_review_input_constructed_correctly(
+    def test_remedy_execution_error(
         self, agent, mock_remedy_agent, mock_review_v2, remedy_input
     ):
-        """Verify ReviewInput is built with correct vulnerability and attempt."""
+        """Plan + approval succeed but process() crashes → error attempt."""
         mock_review_v2.process.return_value = PreApprovalResult(
             review_verdict=ReviewVerdict(
-                finding_id="openscap_020",
+                finding_id="auditd_audispd_syslog_plugin_activated",
                 is_optimal=True,
                 approve=True,
                 security_score=9,
             ),
             approved=True,
         )
-        mock_remedy_agent._tool_scan.return_value = {"pass": True, "summary": "pass"}
+        mock_remedy_agent.process.side_effect = RuntimeError("SSH timeout")
+
+        attempt, approval = agent.process(remedy_input)
+
+        assert approval is not None
+        assert attempt.error_summary == "SSH timeout"
+        assert attempt.success is False
+
+    def test_review_input_constructed_correctly(
+        self, agent, mock_remedy_agent, mock_review_v2, remedy_input
+    ):
+        """Verify ReviewInput is built with correct vulnerability and plan."""
+        mock_review_v2.process.return_value = PreApprovalResult(
+            review_verdict=ReviewVerdict(
+                finding_id="auditd_audispd_syslog_plugin_activated",
+                is_optimal=True,
+                approve=True,
+                security_score=9,
+            ),
+            approved=True,
+        )
 
         agent.process(remedy_input)
 
         review_call_args = mock_review_v2.process.call_args[0][0]
-        assert review_call_args.vulnerability.id == "openscap_020"
-        assert review_call_args.remediation_attempt.finding_id == "openscap_020"
-        assert review_call_args.triage_decision.finding_id == "openscap_020"
+        assert review_call_args.vulnerability.id == "auditd_audispd_syslog_plugin_activated"
+        assert review_call_args.remediation_attempt.finding_id == "auditd_audispd_syslog_plugin_activated"
+        assert review_call_args.triage_decision.finding_id == "auditd_audispd_syslog_plugin_activated"
+        # Plan text should be in the stub attempt's llm_verdict
+        assert "auditd" in review_call_args.remediation_attempt.llm_verdict.message
 
     def test_duration_is_recorded(
         self, agent, mock_remedy_agent, mock_review_v2, remedy_input
@@ -211,14 +202,13 @@ class TestRemedyAgentV2:
         """Verify duration is set on the returned attempt."""
         mock_review_v2.process.return_value = PreApprovalResult(
             review_verdict=ReviewVerdict(
-                finding_id="openscap_020",
+                finding_id="auditd_audispd_syslog_plugin_activated",
                 is_optimal=True,
                 approve=True,
                 security_score=9,
             ),
             approved=True,
         )
-        mock_remedy_agent._tool_scan.return_value = {"pass": True, "summary": "pass"}
 
         attempt, _ = agent.process(remedy_input)
 

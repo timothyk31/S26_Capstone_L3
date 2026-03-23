@@ -5,7 +5,7 @@ Extracted from qa_agent_adaptive.py scan_for_vulnerability method.
 
 import json
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from openscap_cli import OpenSCAPScanner
 from parse_openscap import parse_openscap
@@ -174,3 +174,60 @@ class Scanner:
 
         # Rule not in results — assume fixed
         return True, f"Vulnerability {vuln.id} not found in single-rule scan (possibly fixed)"
+
+    # ── Batch-then-verify helpers ────────────────────────────────────
+
+    def scan_full_profile(self) -> List[Dict[str, Any]]:
+        """
+        Run a full-profile scan and return the parsed list of FAILED findings.
+
+        Returns:
+            List of finding dicts from parse_openscap (only fail/error results).
+        """
+        scan_file = self.work_dir / "full_profile_scan.xml"
+        parsed_file = self.work_dir / "full_profile_scan.json"
+        remote_xml = "/tmp/full_profile_scan.xml"
+
+        success = self.scanner.run_scan(
+            profile=self.profile,
+            output_file=remote_xml,
+            datastream=self.datastream,
+            sudo_password=self.sudo_password,
+        )
+
+        if not success:
+            raise RuntimeError("Full-profile scan execution failed")
+
+        self.scanner.download_results(remote_xml, str(scan_file))
+        result = parse_openscap(str(scan_file), str(parsed_file))
+
+        # parse_openscap returns {"findings": [...], ...}
+        findings = result.get("findings", []) if isinstance(result, dict) else result
+        return findings
+
+    @staticmethod
+    def match_finding(vuln: "Vulnerability", scan_findings: List[Dict[str, Any]]) -> bool:
+        """
+        Check whether a specific vulnerability passed in full-profile scan results.
+
+        Since finding IDs are now rule names (e.g. ``sshd_set_idle_timeout``),
+        matching is a simple ID/rule comparison.
+
+        Args:
+            vuln: The vulnerability to check.
+            scan_findings: List of FAILED findings from ``scan_full_profile()``.
+
+        Returns:
+            True if the vulnerability is NOT in the failed findings (i.e. it passed).
+        """
+        for finding in scan_findings:
+            # Primary: match by id (both are now rule names)
+            if finding.get("id") == vuln.id:
+                return False  # still failing
+            # Fallback: match by rule field or oval_id
+            if finding.get("rule") == vuln.id or finding.get("rule") == vuln.rule:
+                return False
+            if vuln.oval_id and finding.get("oval_id") == vuln.oval_id:
+                return False
+        # Not found in failed findings → passed
+        return True

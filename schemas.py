@@ -94,6 +94,7 @@ class RemedyInput(BaseModel):
     attempt_number: int = 1
     previous_attempts: List['RemediationAttempt'] = []
     review_feedback: Optional[str] = None
+    plan_text: Optional[str] = None
     previous_review_verdicts: List['ReviewVerdict'] = Field(
         default_factory=list,
         description="Structured review verdicts from prior attempts (concerns, suggestions, scores)",
