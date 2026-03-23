@@ -1,17 +1,17 @@
 {
   "vulnerability": {
     "id": "openscap_027",
-    "title": "Disable Kernel Parameter for IPv4 Forwarding on all IPv4 Interfaces",
+    "title": "Ensure the Default Umask is Set Correctly in /etc/profile",
     "severity": "2",
     "cvss": null,
     "host": "localhost",
     "port": null,
     "protocol": null,
-    "description": "To set the runtime status of the net.ipv4.conf.all.forwarding kernel parameter, run the following command: $ sudo sysctl -w net.ipv4.conf.all.forwarding=0 To make sure that the setting is persistent, add the following line to a file in the directory /etc/sysctl.d: net.ipv4.conf.all.forwarding = 0",
-    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then # Comment out any occurrences of net.ipv4.conf.all.forwarding from /etc/sysctl.d/*.conf files for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf; do # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf) if [[ \"$(readlink -f \"$f\")\" == \"/etc/sysctl.conf\" ]]; then continue; fi matching_list=$(grep -P '^(?!#).*[\\s]*net.ipv4.conf.all.forwarding.*$' $f | uniq ) if ! test -z \"$matching_list\"; then while IFS= read -r entry; do escaped_entry=$(sed -e 's|/|\\\\/|g' <<< \"$entry\") # comment out \"net.ipv4.conf.all.forwarding\" matches to preserve user data sed -i --follow-symlinks \"s/^${escaped_entry}$/# &/g\" $f done <<< \"$matching_list\" fi done # # Set sysctl",
+    "description": "To ensure the default umask controlled by /etc/profile is set properly, add or correct the umask setting in /etc/profile to read as follows: umask Note that /etc/profile also reads scripts within /etc/profile.d directory. These scripts are also valid files to set umask value. Therefore, they should also be considered during the check and properly remediated, if necessary.",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then var_accounts_user_umask='' readarray -t profile_files < <(find /etc/profile.d/ -type f -name '*.sh' -or -name 'sh.local') for file in \"${profile_files[@]}\" /etc/profile; do grep -qE '^[^#]*umask' \"$file\" && sed -i -E \"s/^(\\s*umask\\s*)[0-7]+/\\1$var_accounts_user_umask/g\" \"$file\" done if ! grep -qrE '^[^#]*umask' /etc/profile*; then echo \"umask $var_accounts_user_umask\" >> /etc/profile fi else >&2 echo 'Remediation is not applicable, nothing was done' fi",
     "result": "fail",
-    "rule": "xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_forwarding",
-    "oval_id": "xccdf_org.ssgproject.content_rule_sysctl_net_ipv4_conf_all_forwarding",
+    "rule": "xccdf_org.ssgproject.content_rule_accounts_umask_etc_profile",
+    "oval_id": "xccdf_org.ssgproject.content_rule_accounts_umask_etc_profile",
     "scan_class": "compliance",
     "os": "localhost.localdomain"
   },
@@ -19,27 +19,172 @@
     "finding_id": "openscap_027",
     "should_remediate": true,
     "risk_level": "low",
-    "reason": "The change modifies a kernel sysctl parameter that controls IPv4 forwarding; it is a low\u2011risk networking setting that can be safely disabled without affecting authentication or boot processes.",
+    "reason": "Adjusting the default umask in /etc/profile and /etc/profile.d does not affect system boot, authentication mechanisms, or network services. It only changes default file creation permissions, which is a standard STIG remediation and unlikely to cause lockout or service disruption.",
     "requires_human_review": false,
-    "estimated_impact": "networking affected; network_configuration_change; kernel_parameter_modification"
+    "estimated_impact": "authentication/authorization affected; Incorrect default file permissions could allow overly permissive files; Inconsistent umask settings across profile scripts"
   },
   "attempt_number": 2,
   "previous_attempts": [
     {
       "finding_id": "openscap_027",
       "attempt_number": 1,
-      "commands_executed": [],
+      "commands_executed": [
+        "grep -i '^UMASK' -R /etc/login.defs || true",
+        "grep -R \"^[^#]*umask\" -n /etc/profile.d/*.sh 2>/dev/null || true",
+        "sed -i -E \"s/^(\\s*umask\\s+)[0-7]+/\\1 027/\" /etc/profile",
+        "grep -n '^\\s*umask' -R /etc/profile /etc/profile.d/01-umask.sh",
+        "sed -i -E \"s/^(\\s*umask\\s+)[0-7]+/\\1 027/\" /etc/profile.d/01-umask.sh",
+        "grep -R \"^[^#]*umask\" -n /etc/profile* /etc/profile.d/*.sh 2>/dev/null"
+      ],
       "files_modified": [],
-      "files_read": [],
-      "execution_details": [],
+      "files_read": [
+        "/etc/profile",
+        "/etc/profile.d/01-umask.sh",
+        "/etc/profile.d/01-umask.sh"
+      ],
+      "execution_details": [
+        {
+          "command": "test -f /etc/profile && cat /etc/profile || (echo FILE_NOT_FOUND >&2; exit 2)",
+          "stdout": "# /etc/profile\n\n# System wide environment and startup programs, for login setup\n# Functions and aliases go in /etc/bashrc\n\n# It's NOT a good idea to change this file unless you know what you\n# are doing. It's much better to create a custom.sh shell script in\n# /etc/profile.d/ to make custom changes to your environment, as this\n# will prevent the need for merging in future updates.\n\npathmunge () {\n    case \":${PATH}:\" in\n        *:\"$1\":*)\n            ;;\n        *)\n            if [ \"$2\" = \"after\" ] ; then\n                PATH=$PATH:$1\n            else\n                PATH=$1:$PATH\n            fi\n    esac\n}\n\n\nif [ -x /usr/bin/id ]; then\n    if [ -z \"$EUID\" ]; then\n        # ksh workaround\n        EUID=`/usr/bin/id -u`\n        UID=`/usr/bin/id -ru`\n    fi\n    USER=\"`/usr/bin/id -un`\"\n    LOGNAME=$USER\n    MAIL=\"/var/spool/mail/$USER\"\nfi\n\n# Path manipulation\nif [ \"$EUID\" = \"0\" ]; then\n    pathmunge /usr/sbin\n    pathmunge /usr/local/sbin\nelse\n    pathmunge /usr/local/sbin after\n    pathmunge /usr/sbin after\nfi\n\nHOSTNAME=$(/usr/bin/hostnamectl --transient 2>/dev/null) || \\\nHOSTNAME=$(/usr/bin/hostname 2>/dev/null) || \\\nHOSTNAME=$(/usr/bin/uname -n)\n\nHISTSIZE=1000\nif [ \"$HISTCONTROL\" = \"ignorespace\" ] ; then\n    export HISTCONTROL=ignoreboth\nelse\n    export HISTCONTROL=ignoredups\nfi\n\nexport PATH USER LOGNAME MAIL HOSTNAME HISTSIZE HISTCONTROL\n\nfor i in /etc/profile.d/*.sh /etc/profile.d/sh.local ; do\n    if [ -r \"$i\" ]; then\n        if [ \"${-#*i}\" != \"$-\" ]; then \n            . \"$i\"\n        else\n            . \"$i\" >/dev/null\n        fi\n    fi\ndone\n\nunset i\nunset -f pathmunge\n\nif [ -n \"${BASH_VERSION-}\" ] ; then\n        if [ -f /etc/bashrc ] ; then\n                # Bash login shells run only /etc/profile\n                # Bash non-login shells run only /etc/bashrc\n                # Check for double sourcing is done in /etc/bashrc.\n                . /etc/bashrc\n       fi\nfi\numask 022\n",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel.",
+          "exit_code": 0,
+          "success": true,
+          "duration": 1.799424171447754,
+          "timed_out": false,
+          "truncated_stdout": false,
+          "truncated_stderr": false,
+          "normalized_from": null
+        },
+        {
+          "command": "grep -i '^UMASK' -R /etc/login.defs || true",
+          "stdout": "UMASK 077\n",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel.",
+          "exit_code": 0,
+          "success": true,
+          "duration": 1.0680968761444092,
+          "timed_out": false,
+          "truncated_stdout": false,
+          "truncated_stderr": false,
+          "normalized_from": null
+        },
+        {
+          "command": "grep -R \"^[^#]*umask\" -n /etc/profile.d/*.sh 2>/dev/null || true",
+          "stdout": "/etc/profile.d/01-umask.sh:1:umask 022\n",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel.",
+          "exit_code": 0,
+          "success": true,
+          "duration": 1.1066739559173584,
+          "timed_out": false,
+          "truncated_stdout": false,
+          "truncated_stderr": false,
+          "normalized_from": null
+        },
+        {
+          "command": "test -f /etc/profile.d/01-umask.sh && cat /etc/profile.d/01-umask.sh || (echo FILE_NOT_FOUND >&2; exit 2)",
+          "stdout": "umask 022",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel.",
+          "exit_code": 0,
+          "success": true,
+          "duration": 1.0879383087158203,
+          "timed_out": false,
+          "truncated_stdout": false,
+          "truncated_stderr": false,
+          "normalized_from": null
+        },
+        {
+          "command": "sed -i -E \"s/^(\\s*umask\\s+)[0-7]+/\\1 027/\" /etc/profile",
+          "stdout": "",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel.",
+          "exit_code": 0,
+          "success": true,
+          "duration": 1.146648645401001,
+          "timed_out": false,
+          "truncated_stdout": false,
+          "truncated_stderr": false,
+          "normalized_from": null
+        },
+        {
+          "command": "grep -n '^\\s*umask' -R /etc/profile /etc/profile.d/01-umask.sh",
+          "stdout": "/etc/profile:79:umask  027\n/etc/profile.d/01-umask.sh:1:umask 022\n",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel.",
+          "exit_code": 0,
+          "success": true,
+          "duration": 1.0552310943603516,
+          "timed_out": false,
+          "truncated_stdout": false,
+          "truncated_stderr": false,
+          "normalized_from": null
+        },
+        {
+          "command": "sed -i -E \"s/^(\\s*umask\\s+)[0-7]+/\\1 027/\" /etc/profile.d/01-umask.sh",
+          "stdout": "",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel.",
+          "exit_code": 0,
+          "success": true,
+          "duration": 1.1460986137390137,
+          "timed_out": false,
+          "truncated_stdout": false,
+          "truncated_stderr": false,
+          "normalized_from": null
+        },
+        {
+          "command": "grep -R \"^[^#]*umask\" -n /etc/profile* /etc/profile.d/*.sh 2>/dev/null",
+          "stdout": "/etc/profile:79:umask  027\n/etc/profile.d/01-umask.sh:1:umask  027\n/etc/profile.d/01-umask.sh:1:umask  027\n",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel.",
+          "exit_code": 0,
+          "success": true,
+          "duration": 1.2092070579528809,
+          "timed_out": false,
+          "truncated_stdout": false,
+          "truncated_stderr": false,
+          "normalized_from": null
+        },
+        {
+          "command": "test -f /etc/profile.d/01-umask.sh && cat /etc/profile.d/01-umask.sh || (echo FILE_NOT_FOUND >&2; exit 2)",
+          "stdout": "umask  027",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel.",
+          "exit_code": 0,
+          "success": true,
+          "duration": 1.0450084209442139,
+          "timed_out": false,
+          "truncated_stdout": false,
+          "truncated_stderr": false,
+          "normalized_from": null
+        }
+      ],
       "scan_passed": false,
-      "scan_output": null,
-      "duration": 0.0,
+      "scan_output": "Vulnerability openscap_027: result=fail",
+      "duration": 96.85443258285522,
       "success": false,
-      "error_summary": "LLM API error 400: {\"error\":{\"message\":\"Provider returned error\",\"code\":400,\"metadata\":{\"raw\":\"{\\\"error\\\":{\\\"message\\\":\\\"Extra data: line 1 column 7 (char 6) None\\\",\\\"type\\\":\\\"BadRequestError\\\",\\\"param\\\":null,\\\"code\\\":400}}\",\"provider_name\":\"Nvidia\",\"is_byok\":false}},\"user_id\":\"user_35GamuJcm8kTLrFPwUeBmFbmFiD\"}",
-      "llm_verdict": null
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "The default umask is now correctly set to **027** in both **/etc/profile** and the **/etc/profile.d/01\u2011umask.sh** script, fulfilling the `accounts_umask_etc_profile` requirement.",
+        "resolved": false
+      }
     }
   ],
   "review_feedback": "Review+QA approved but the verification scan failed. Try a different approach.",
-  "previous_review_verdicts": []
+  "previous_review_verdicts": [
+    {
+      "finding_id": "openscap_027",
+      "is_optimal": false,
+      "approve": true,
+      "feedback": "The remediation plan correctly targets /etc/profile and all relevant scripts in /etc/profile.d/, backs up files, and ensures the umask is set to the required 027. It therefore resolves the vulnerability, though additional safeguards and testing are recommended.",
+      "concerns": [
+        "Potentially overwriting intentionally different umask values in /etc/profile.d/ scripts could break legacy services.",
+        "Sed replacements may unintentionally modify commented lines or introduce syntax errors if the original file format is unexpected.",
+        "Changes will only take effect after a new login session; existing sessions remain unchanged.",
+        "The original script snippet used an empty var_accounts_user_umask, which would have resulted in an invalid umask."
+      ],
+      "suggested_improvements": [
+        "Add logic to skip or warn about files that deliberately require a different umask rather than blindly overwriting them.",
+        "Validate the edited files with a syntax check (e.g., `bash -n /etc/profile`) before replacing the originals.",
+        "Implement a dry\u2011run mode and test on a copy of the files before applying changes on production.",
+        "Ensure the remediation runs as part of a configuration\u2011management system to maintain idempotence and allow easy rollback.",
+        "Document the need for users to re\u2011login or source the profile to apply the new umask immediately."
+      ],
+      "security_score": 8,
+      "best_practices_followed": true
+    }
+  ]
 }
