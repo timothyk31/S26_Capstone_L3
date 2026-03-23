@@ -1,17 +1,17 @@
 {
   "vulnerability": {
     "id": "openscap_021",
-    "title": "Configure Logind to terminate idle sessions after certain time of inactivity",
+    "title": "Ensure PAM Enforces Password Requirements - Prevent the Use of Dictionary Words",
     "severity": "2",
     "cvss": null,
     "host": "localhost",
     "port": null,
     "protocol": null,
-    "description": "To configure logind service to terminate inactive user sessions after seconds, edit the file /etc/systemd/logind.conf. Ensure that there is a section [Login] which contains the configuration StopIdleSessionSec= .",
-    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core && { ( grep -qP \"^ID=[\\\"']?rhel[\\\"']?$\" \"/etc/os-release\" && { real=\"$(grep -P \"^VERSION_ID=[\\\"']?[\\w.]+[\\\"']?$\" /etc/os-release | sed \"s/^VERSION_ID=[\\\"']\\?\\([^\\\"']\\+\\)[\\\"']\\?$/\\1/\")\"; expected=\"8.7\"; printf \"%s\\n%s\" \"$expected\" \"$real\" | sort -VC; } && grep -qP \"^ID=[\\\"']?rhel[\\\"']?$\" \"/etc/os-release\" && { real=\"$(grep -P \"^VERSION_ID=[\\\"']?[\\w.]+[\\\"']?$\" /etc/os-release | sed \"s/^VERSION_ID=[\\\"']\\?\\([^\\\"']\\+\\)[\\\"']\\?$/\\1/\")\"; expected=\"9.0\"; [[ \"$real\" != \"$expected\" ]]; } ) || grep -qP \"^ID=[\\\"']?ol[\\\"']?$\" \"/etc/os-release\" && { real=\"$(grep -P \"^VERSION_ID=[\\\"']?[\\w.]+[\\\"']?$\" /etc/os-release | sed \"s/^VERSION_ID=[\\\"']\\?\\([^\\\"']\\+\\)[\\\"']\\?$/\\1/\")\"; expected=\"8.7\"; printf \"%s\\n%s\" \"$expected\" \"$real\" ",
+    "description": "The pam_pwquality module's dictcheck check if passwords contains dictionary words. When dictcheck is set to 1 passwords will be checked for dictionary words.",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core && { rpm --quiet -q libpwquality; }; then var_password_pam_dictcheck='' if grep -sq dictcheck /etc/security/pwquality.conf.d/*.conf ; then sed -i \"/dictcheck/d\" /etc/security/pwquality.conf.d/*.conf fi # Strip any search characters in the key arg so that the key can be replaced without # adding any search characters to the config file. stripped_key=$(sed 's/[\\^=\\$,;+]*//g' <<< \"^dictcheck\") # shellcheck disable=SC2059 printf -v formatted_output \"%s = %s\" \"$stripped_key\" \"$var_password_pam_dictcheck\" # If the key exists, change it. Otherwise, add it to the config_file. # We search for the key string followed by a word boundary (matched by \\>), # so if we search for 'setting', 'setting2' won't match. if LC_AL",
     "result": "fail",
-    "rule": "xccdf_org.ssgproject.content_rule_logind_session_timeout",
-    "oval_id": "xccdf_org.ssgproject.content_rule_logind_session_timeout",
+    "rule": "xccdf_org.ssgproject.content_rule_accounts_password_pam_dictcheck",
+    "oval_id": "xccdf_org.ssgproject.content_rule_accounts_password_pam_dictcheck",
     "scan_class": "compliance",
     "os": "localhost.localdomain"
   },
@@ -19,9 +19,9 @@
     "finding_id": "openscap_021",
     "should_remediate": true,
     "risk_level": "low",
-    "reason": "This STIG item configures a session timeout via systemd-logind, which is a standard hardening measure that does not affect core authentication mechanisms or system boot. The change is reversible and poses minimal risk of lockout when applied with appropriate timeout values.",
+    "reason": "The remediation only edits PAM pwquality configuration to set the dictcheck option. This is a standard password\u2011policy change that does not affect login mechanisms, boot process, or critical services, so it is unlikely to cause lockout or system breakage.",
     "requires_human_review": false,
-    "estimated_impact": "authentication/authorization affected; potential user session interruption if timeout is set too low; requires editing logind.conf and reloading the service"
+    "estimated_impact": "authentication/authorization affected; Potential weakening of password complexity enforcement; Misconfiguration could render pwquality file syntactically invalid"
   },
   "attempt_number": 2,
   "previous_attempts": [
@@ -29,212 +29,99 @@
       "finding_id": "openscap_021",
       "attempt_number": 1,
       "commands_executed": [
-        "grep -n \"^StopIdleSessionSec=\" /etc/systemd/logind.conf",
-        "grep -n '#IdleActionSec=30min' /etc/systemd/logind.conf",
-        "grep -n '^\\[Login\\]' /etc/systemd/logind.conf",
-        "echo \"StopIdleSessionSec=10min\" >> /etc/systemd/logind.conf",
-        "sed -i 's/^#IdleActionSec=.*/IdleActionSec=10min/' /etc/systemd/logind.conf",
-        "systemd-analyze cat-config systemd/logind.conf",
-        "sed -i '/^IdleActionSec=10min$/d' /etc/systemd/logind.conf"
+        "ls -1 /etc/security/pwquality.conf.d",
+        "grep -R \"dictcheck\" -n /etc/security/pwquality.conf*",
+        "grep -n \"^dictcheck\" -n /etc/security/pwquality.conf"
       ],
-      "files_modified": [],
+      "files_modified": [
+        "/etc/security/pwquality.conf"
+      ],
       "files_read": [
-        "/etc/systemd/logind.conf",
-        "/etc/systemd/logind.conf",
-        "/etc/systemd/logind.conf",
-        "/etc/systemd/logind.conf",
-        "/etc/systemd/logind.conf",
-        "/etc/systemd/logind.conf"
+        "/etc/security/pwquality.conf"
       ],
       "execution_details": [
         {
-          "command": "test -f /etc/systemd/logind.conf && cat /etc/systemd/logind.conf || (echo FILE_NOT_FOUND >&2; exit 2)",
-          "stdout": "#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it under the\n#  terms of the GNU Lesser General Public License as published by the Free\n#  Software Foundation; either version 2.1 of the License, or (at your option)\n#  any later version.\n#\n# Entries in this file show the compile time defaults. Local configuration\n# should be created by either modifying this file, or by creating \"drop-ins\" in\n# the logind.conf.d/ subdirectory. The latter is generally recommended.\n# Defaults can be restored by simply deleting this file and all drop-ins.\n#\n# Use 'systemd-analyze cat-config systemd/logind.conf' to display the full config.\n#\n# See logind.conf(5) for details.\n\n[Login]\n#NAutoVTs=6\n#ReserveVT=6\n#KillUserProcesses=no\n#KillOnlyUsers=\n#KillExcludeUsers=root\n#InhibitDelayMaxSec=5\n#UserStopDelaySec=10\n#HandlePowerKey=poweroff\n#HandlePowerKeyLongPress=ignore\n#HandleRebootKey=reboot\n#HandleRebootKeyLongPress=poweroff\n#HandleSuspendKey=suspend\n#HandleSuspendKeyLongPress=hibernate\n#HandleHibernateKey=hibernate\n#HandleHibernateKeyLongPress=ignore\n#HandleLidSwitch=suspend\n#HandleLidSwitchExternalPower=suspend\n#HandleLidSwitchDocked=ignore\n#PowerKeyIgnoreInhibited=no\n#SuspendKeyIgnoreInhibited=no\n#HibernateKeyIgnoreInhibited=no\n#LidSwitchIgnoreInhibited=yes\n#RebootKeyIgnoreInhibited=no\n#HoldoffTimeoutSec=30s\n#IdleAction=ignore\n#IdleActionSec=30min\n#RuntimeDirectorySize=10%\n#RuntimeDirectoryInodesMax=\n#RemoveIPC=no\n#InhibitorsMax=8192\n#SessionsMax=8192\n",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
+          "command": "test -f /etc/security/pwquality.conf && cat /etc/security/pwquality.conf || (echo FILE_NOT_FOUND >&2; exit 2)",
+          "stdout": "enforce_for_root = 2\nucredit = -1\ndcredit = -1\nlcredit = -1\nminlen = 8\nocredit = -1\n",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n- The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
           "exit_code": 0,
           "success": true,
-          "duration": 2.5420942306518555,
+          "duration": 1.8420660495758057,
           "timed_out": false,
           "truncated_stdout": false,
           "truncated_stderr": false,
           "normalized_from": null
         },
         {
-          "command": "test -f /etc/systemd/logind.conf && cat /etc/systemd/logind.conf || (echo FILE_NOT_FOUND >&2; exit 2)",
-          "stdout": "#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it under the\n#  terms of the GNU Lesser General Public License as published by the Free\n#  Software Foundation; either version 2.1 of the License, or (at your option)\n#  any later version.\n#\n# Entries in this file show the compile time defaults. Local configuration\n# should be created by either modifying this file, or by creating \"drop-ins\" in\n# the logind.conf.d/ subdirectory. The latter is generally recommended.\n# Defaults can be restored by simply deleting this file and all drop-ins.\n#\n# Use 'systemd-analyze cat-config systemd/logind.conf' to display the full config.\n#\n# See logind.conf(5) for details.\n\n[Login]\n#NAutoVTs=6\n#ReserveVT=6\n#KillUserProcesses=no\n#KillOnlyUsers=\n#KillExcludeUsers=root\n#InhibitDelayMaxSec=5\n#UserStopDelaySec=10\n#HandlePowerKey=poweroff\n#HandlePowerKeyLongPress=ignore\n#HandleRebootKey=reboot\n#HandleRebootKeyLongPress=poweroff\n#HandleSuspendKey=suspend\n#HandleSuspendKeyLongPress=hibernate\n#HandleHibernateKey=hibernate\n#HandleHibernateKeyLongPress=ignore\n#HandleLidSwitch=suspend\n#HandleLidSwitchExternalPower=suspend\n#HandleLidSwitchDocked=ignore\n#PowerKeyIgnoreInhibited=no\n#SuspendKeyIgnoreInhibited=no\n#HibernateKeyIgnoreInhibited=no\n#LidSwitchIgnoreInhibited=yes\n#RebootKeyIgnoreInhibited=no\n#HoldoffTimeoutSec=30s\n#IdleAction=ignore\n#IdleActionSec=30min\n#RuntimeDirectorySize=10%\n#RuntimeDirectoryInodesMax=\n#RemoveIPC=no\n#InhibitorsMax=8192\n#SessionsMax=8192\n",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
+          "command": "ls -1 /etc/security/pwquality.conf.d",
+          "stdout": "10-minlen.conf\n10-minlen.conf.bak\n10-ocredit.conf\nlcredit.conf\n",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n- The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
           "exit_code": 0,
           "success": true,
-          "duration": 2.348254919052124,
+          "duration": 1.0588626861572266,
           "timed_out": false,
           "truncated_stdout": false,
           "truncated_stderr": false,
           "normalized_from": null
         },
         {
-          "command": "grep -n \"^StopIdleSessionSec=\" /etc/systemd/logind.conf",
+          "command": "grep -R \"dictcheck\" -n /etc/security/pwquality.conf*",
           "stdout": "",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n- The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
           "exit_code": 1,
           "success": false,
-          "duration": 1.5340495109558105,
+          "duration": 1.1493487358093262,
           "timed_out": false,
           "truncated_stdout": false,
           "truncated_stderr": false,
           "normalized_from": null
         },
         {
-          "command": "grep -n '#IdleActionSec=30min' /etc/systemd/logind.conf",
-          "stdout": "43:#IdleActionSec=30min\n",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
-          "exit_code": 0,
-          "success": true,
-          "duration": 1.5256001949310303,
-          "timed_out": false,
-          "truncated_stdout": false,
-          "truncated_stderr": false,
-          "normalized_from": null
-        },
-        {
-          "command": "grep -n '^\\[Login\\]' /etc/systemd/logind.conf",
-          "stdout": "17:[Login]\n",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
-          "exit_code": 0,
-          "success": true,
-          "duration": 1.5011401176452637,
-          "timed_out": false,
-          "truncated_stdout": false,
-          "truncated_stderr": false,
-          "normalized_from": null
-        },
-        {
-          "command": "echo \"StopIdleSessionSec=10min\" >> /etc/systemd/logind.conf",
+          "command": "echo ZW5mb3JjZV9mb3Jfcm9vdCA9IDIKdWNyZWRpdCA9IC0xCmRjcmVkaXQgPSAtMQpsY3JlZGl0ID0gLTEKbWlubGVuID0gOApvY3JlZGl0ID0gLTEKZGljdGNoZWNrID0gMQo= | base64 -d > /etc/security/pwquality.conf.tmp && chmod 0644 /etc/security/pwquality.conf.tmp && mv /etc/security/pwquality.conf.tmp /etc/security/pwquality.conf",
           "stdout": "",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n- The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
           "exit_code": 0,
           "success": true,
-          "duration": 1.6112582683563232,
+          "duration": 1.1504857540130615,
           "timed_out": false,
           "truncated_stdout": false,
           "truncated_stderr": false,
           "normalized_from": null
         },
         {
-          "command": "test -f /etc/systemd/logind.conf && cat /etc/systemd/logind.conf || (echo FILE_NOT_FOUND >&2; exit 2)",
-          "stdout": "#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it under the\n#  terms of the GNU Lesser General Public License as published by the Free\n#  Software Foundation; either version 2.1 of the License, or (at your option)\n#  any later version.\n#\n# Entries in this file show the compile time defaults. Local configuration\n# should be created by either modifying this file, or by creating \"drop-ins\" in\n# the logind.conf.d/ subdirectory. The latter is generally recommended.\n# Defaults can be restored by simply deleting this file and all drop-ins.\n#\n# Use 'systemd-analyze cat-config systemd/logind.conf' to display the full config.\n#\n# See logind.conf(5) for details.\n\n[Login]\n#NAutoVTs=6\n#ReserveVT=6\n#KillUserProcesses=no\n#KillOnlyUsers=\n#KillExcludeUsers=root\n#InhibitDelayMaxSec=5\n#UserStopDelaySec=10\n#HandlePowerKey=poweroff\n#HandlePowerKeyLongPress=ignore\n#HandleRebootKey=reboot\n#HandleRebootKeyLongPress=poweroff\n#HandleSuspendKey=suspend\n#HandleSuspendKeyLongPress=hibernate\n#HandleHibernateKey=hibernate\n#HandleHibernateKeyLongPress=ignore\n#HandleLidSwitch=suspend\n#HandleLidSwitchExternalPower=suspend\n#HandleLidSwitchDocked=ignore\n#PowerKeyIgnoreInhibited=no\n#SuspendKeyIgnoreInhibited=no\n#HibernateKeyIgnoreInhibited=no\n#LidSwitchIgnoreInhibited=yes\n#RebootKeyIgnoreInhibited=no\n#HoldoffTimeoutSec=30s\n#IdleAction=ignore\n#IdleActionSec=30min\n#RuntimeDirectorySize=10%\n#RuntimeDirectoryInodesMax=\n#RemoveIPC=no\n#InhibitorsMax=8192\n#SessionsMax=8192\nStopIdleSessionSec=10min\n",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
+          "command": "grep -n \"^dictcheck\" -n /etc/security/pwquality.conf",
+          "stdout": "7:dictcheck = 1\n",
+          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only.\nBy using this IS (which includes any device attached to this IS), you consent to the following conditions:\n- The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
           "exit_code": 0,
           "success": true,
-          "duration": 1.5678811073303223,
-          "timed_out": false,
-          "truncated_stdout": false,
-          "truncated_stderr": false,
-          "normalized_from": null
-        },
-        {
-          "command": "sed -i 's/^#IdleActionSec=.*/IdleActionSec=10min/' /etc/systemd/logind.conf",
-          "stdout": "",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
-          "exit_code": 0,
-          "success": true,
-          "duration": 2.3063035011291504,
-          "timed_out": false,
-          "truncated_stdout": false,
-          "truncated_stderr": false,
-          "normalized_from": null
-        },
-        {
-          "command": "test -f /etc/systemd/logind.conf && cat /etc/systemd/logind.conf || (echo FILE_NOT_FOUND >&2; exit 2)",
-          "stdout": "#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it under the\n#  terms of the GNU Lesser General Public License as published by the Free\n#  Software Foundation; either version 2.1 of the License, or (at your option)\n#  any later version.\n#\n# Entries in this file show the compile time defaults. Local configuration\n# should be created by either modifying this file, or by creating \"drop-ins\" in\n# the logind.conf.d/ subdirectory. The latter is generally recommended.\n# Defaults can be restored by simply deleting this file and all drop-ins.\n#\n# Use 'systemd-analyze cat-config systemd/logind.conf' to display the full config.\n#\n# See logind.conf(5) for details.\n\n[Login]\n#NAutoVTs=6\n#ReserveVT=6\n#KillUserProcesses=no\n#KillOnlyUsers=\n#KillExcludeUsers=root\n#InhibitDelayMaxSec=5\n#UserStopDelaySec=10\n#HandlePowerKey=poweroff\n#HandlePowerKeyLongPress=ignore\n#HandleRebootKey=reboot\n#HandleRebootKeyLongPress=poweroff\n#HandleSuspendKey=suspend\n#HandleSuspendKeyLongPress=hibernate\n#HandleHibernateKey=hibernate\n#HandleHibernateKeyLongPress=ignore\n#HandleLidSwitch=suspend\n#HandleLidSwitchExternalPower=suspend\n#HandleLidSwitchDocked=ignore\n#PowerKeyIgnoreInhibited=no\n#SuspendKeyIgnoreInhibited=no\n#HibernateKeyIgnoreInhibited=no\n#LidSwitchIgnoreInhibited=yes\n#RebootKeyIgnoreInhibited=no\n#HoldoffTimeoutSec=30s\n#IdleAction=ignore\nIdleActionSec=10min\n#RuntimeDirectorySize=10%\n#RuntimeDirectoryInodesMax=\n#RemoveIPC=no\n#InhibitorsMax=8192\n#SessionsMax=8192\nStopIdleSessionSec=10min\n",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
-          "exit_code": 0,
-          "success": true,
-          "duration": 1.784724473953247,
-          "timed_out": false,
-          "truncated_stdout": false,
-          "truncated_stderr": false,
-          "normalized_from": null
-        },
-        {
-          "command": "test -f /etc/systemd/logind.conf && cat /etc/systemd/logind.conf || (echo FILE_NOT_FOUND >&2; exit 2)",
-          "stdout": "#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it under the\n#  terms of the GNU Lesser General Public License as published by the Free\n#  Software Foundation; either version 2.1 of the License, or (at your option)\n#  any later version.\n#\n# Entries in this file show the compile time defaults. Local configuration\n# should be created by either modifying this file, or by creating \"drop-ins\" in\n# the logind.conf.d/ subdirectory. The latter is generally recommended.\n# Defaults can be restored by simply deleting this file and all drop-ins.\n#\n# Use 'systemd-analyze cat-config systemd/logind.conf' to display the full config.\n#\n# See logind.conf(5) for details.\n\n[Login]\n#NAutoVTs=6\n#ReserveVT=6\n#KillUserProcesses=no\n#KillOnlyUsers=\n#KillExcludeUsers=root\n#InhibitDelayMaxSec=5\n#UserStopDelaySec=10\n#HandlePowerKey=poweroff\n#HandlePowerKeyLongPress=ignore\n#HandleRebootKey=reboot\n#HandleRebootKeyLongPress=poweroff\n#HandleSuspendKey=suspend\n#HandleSuspendKeyLongPress=hibernate\n#HandleHibernateKey=hibernate\n#HandleHibernateKeyLongPress=ignore\n#HandleLidSwitch=suspend\n#HandleLidSwitchExternalPower=suspend\n#HandleLidSwitchDocked=ignore\n#PowerKeyIgnoreInhibited=no\n#SuspendKeyIgnoreInhibited=no\n#HibernateKeyIgnoreInhibited=no\n#LidSwitchIgnoreInhibited=yes\n#RebootKeyIgnoreInhibited=no\n#HoldoffTimeoutSec=30s\n#IdleAction=ignore\nIdleActionSec=10min\n#RuntimeDirectorySize=10%\n#RuntimeDirectoryInodesMax=\n#RemoveIPC=no\n#InhibitorsMax=8192\n#SessionsMax=8192\nStopIdleSessionSec=10min\n",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
-          "exit_code": 0,
-          "success": true,
-          "duration": 1.536830186843872,
-          "timed_out": false,
-          "truncated_stdout": false,
-          "truncated_stderr": false,
-          "normalized_from": null
-        },
-        {
-          "command": "systemd-analyze cat-config systemd/logind.conf",
-          "stdout": "# /etc/systemd/logind.conf\n#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it under the\n#  terms of the GNU Lesser General Public License as published by the Free\n#  Software Foundation; either version 2.1 of the License, or (at your option)\n#  any later version.\n#\n# Entries in this file show the compile time defaults. Local configuration\n# should be created by either modifying this file, or by creating \"drop-ins\" in\n# the logind.conf.d/ subdirectory. The latter is generally recommended.\n# Defaults can be restored by simply deleting this file and all drop-ins.\n#\n# Use 'systemd-analyze cat-config systemd/logind.conf' to display the full config.\n#\n# See logind.conf(5) for details.\n\n[Login]\n#NAutoVTs=6\n#ReserveVT=6\n#KillUserProcesses=no\n#KillOnlyUsers=\n#KillExcludeUsers=root\n#InhibitDelayMaxSec=5\n#UserStopDelaySec=10\n#HandlePowerKey=poweroff\n#HandlePowerKeyLongPress=ignore\n#HandleRebootKey=reboot\n#HandleRebootKeyLongPress=poweroff\n#HandleSuspendKey=suspend\n#HandleSuspendKeyLongPress=hibernate\n#HandleHibernateKey=hibernate\n#HandleHibernateKeyLongPress=ignore\n#HandleLidSwitch=suspend\n#HandleLidSwitchExternalPower=suspend\n#HandleLidSwitchDocked=ignore\n#PowerKeyIgnoreInhibited=no\n#SuspendKeyIgnoreInhibited=no\n#HibernateKeyIgnoreInhibited=no\n#LidSwitchIgnoreInhibited=yes\n#RebootKeyIgnoreInhibited=no\n#HoldoffTimeoutSec=30s\n#IdleAction=ignore\nIdleActionSec=10min\n#RuntimeDirectorySize=10%\n#RuntimeDirectoryInodesMax=\n#RemoveIPC=no\n#InhibitorsMax=8192\n#SessionsMax=8192\nStopIdleSessionSec=10min\n",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
-          "exit_code": 0,
-          "success": true,
-          "duration": 2.5626158714294434,
-          "timed_out": false,
-          "truncated_stdout": false,
-          "truncated_stderr": false,
-          "normalized_from": null
-        },
-        {
-          "command": "sed -i '/^IdleActionSec=10min$/d' /etc/systemd/logind.conf",
-          "stdout": "",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
-          "exit_code": 0,
-          "success": true,
-          "duration": 2.2880818843841553,
-          "timed_out": false,
-          "truncated_stdout": false,
-          "truncated_stderr": false,
-          "normalized_from": null
-        },
-        {
-          "command": "test -f /etc/systemd/logind.conf && cat /etc/systemd/logind.conf || (echo FILE_NOT_FOUND >&2; exit 2)",
-          "stdout": "#  This file is part of systemd.\n#\n#  systemd is free software; you can redistribute it and/or modify it under the\n#  terms of the GNU Lesser General Public License as published by the Free\n#  Software Foundation; either version 2.1 of the License, or (at your option)\n#  any later version.\n#\n# Entries in this file show the compile time defaults. Local configuration\n# should be created by either modifying this file, or by creating \"drop-ins\" in\n# the logind.conf.d/ subdirectory. The latter is generally recommended.\n# Defaults can be restored by simply deleting this file and all drop-ins.\n#\n# Use 'systemd-analyze cat-config systemd/logind.conf' to display the full config.\n#\n# See logind.conf(5) for details.\n\n[Login]\n#NAutoVTs=6\n#ReserveVT=6\n#KillUserProcesses=no\n#KillOnlyUsers=\n#KillExcludeUsers=root\n#InhibitDelayMaxSec=5\n#UserStopDelaySec=10\n#HandlePowerKey=poweroff\n#HandlePowerKeyLongPress=ignore\n#HandleRebootKey=reboot\n#HandleRebootKeyLongPress=poweroff\n#HandleSuspendKey=suspend\n#HandleSuspendKeyLongPress=hibernate\n#HandleHibernateKey=hibernate\n#HandleHibernateKeyLongPress=ignore\n#HandleLidSwitch=suspend\n#HandleLidSwitchExternalPower=suspend\n#HandleLidSwitchDocked=ignore\n#PowerKeyIgnoreInhibited=no\n#SuspendKeyIgnoreInhibited=no\n#HibernateKeyIgnoreInhibited=no\n#LidSwitchIgnoreInhibited=yes\n#RebootKeyIgnoreInhibited=no\n#HoldoffTimeoutSec=30s\n#IdleAction=ignore\n#RuntimeDirectorySize=10%\n#RuntimeDirectoryInodesMax=\n#RemoveIPC=no\n#InhibitorsMax=8192\n#SessionsMax=8192\nStopIdleSessionSec=10min\n",
-          "stderr": "You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions:\n-The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel",
-          "exit_code": 0,
-          "success": true,
-          "duration": 2.3230953216552734,
+          "duration": 1.1203453540802002,
           "timed_out": false,
           "truncated_stdout": false,
           "truncated_stderr": false,
           "normalized_from": null
         }
       ],
-      "scan_passed": false,
-      "scan_output": "Vulnerability openscap_021: result=error",
-      "duration": 195.9310073852539,
-      "success": false,
+      "scan_passed": true,
+      "scan_output": "Vulnerability openscap_021 not found in single-rule scan (possibly fixed)",
+      "duration": 48.41172170639038,
+      "success": true,
       "error_summary": null,
       "llm_verdict": {
-        "message": "The `/etc/systemd/logind.conf` file has been updated to include the setting:\n\n```\nStopIdleSessionSec=10min\n```\n\nThis line was added (without duplication) under the `[Login]` section, configuring the system to terminate idle sessions after 10 minutes of inactivity. The change is minimal and reversible. A verification scan will run automatically after this session to confirm compliance.",
-        "resolved": false
+        "message": "The **`accounts_password_pam_dictcheck`** finding has been remediated.\n\n**Action taken**\n- Updated **`/etc/security/pwquality.conf`** to include:\n  ```ini\n  dictcheck = 1\n  ```\n\n**Verification**\n- Ran `grep -n \"^dictcheck\" /etc/security/pwquality.conf` and confirmed the line `dictcheck = 1` is present.\n\nThe system now enforces the PAM password requirement to prevent the use of dictionary words, satisfying the OpenSCAP rule. No further changes are required.",
+        "resolved": true
       }
     }
   ],
-  "review_feedback": "Review+QA approved but the verification scan failed. Try a different approach.",
+  "review_feedback": "Review rejected the fix",
   "previous_review_verdicts": [
     {
       "finding_id": "openscap_021",
       "is_optimal": false,
-      "approve": true,
-      "feedback": "Remediation correctly adds StopIdleSessionSec setting but contains syntax errors and lacks verification steps.",
-      "concerns": [
-        "Potential typo in mkdir command causing failure",
-        "No explicit timeout value specified; administrators must choose appropriate value",
-        "May terminate active sessions unexpectedly if timeout is too low",
-        "Lacks validation that the configuration was applied correctly"
-      ],
-      "suggested_improvements": [
-        "Correct the mkdir command to `sudo mkdir -p /etc/systemd/logind.conf.d`",
-        "Specify a reasonable timeout (e.g., 10m) and document it",
-        "Add verification step to confirm `StopIdleSessionSec=` is set",
-        "Use a version\u2011controlled drop\u2011in file and consider using systemd-sysusers for directory creation"
-      ],
-      "security_score": 9,
+      "approve": false,
+      "feedback": null,
+      "concerns": [],
+      "suggested_improvements": [],
+      "security_score": null,
       "best_practices_followed": true
     }
   ]
