@@ -245,10 +245,13 @@ class RemedyAgent:
             "Rules:",
             "- Use run_cmd for EXACTLY ONE shell command at a time. Do NOT chain with && ; or multiline scripts.",
             "- Commands run as root. Do not prefix with sudo.",
-            "- ALWAYS use read_file to inspect the target config file BEFORE modifying it.",
+            "- ALWAYS inspect the target config file BEFORE modifying it — use grep, NOT read_file.",
+            "  Example: run_cmd 'grep -n \"minlen\" /etc/security/pwquality.conf'",
             "- Do NOT append duplicate lines. Use sed -i to modify existing values in-place.",
             "- If a line is commented (e.g. '# minlen = 8'), uncomment it and set the value.",
             "- Prefer minimal, reversible changes. A verification scan runs automatically after your session.",
+            "- OUTPUT SIZE: Use grep/head/tail instead of read_file or cat on whole files.",
+            "- For curl/wget: verify downloads with 'file <path>' or 'head -c 100 <path>'. If HTML is returned, stop and use a local/package source instead.",
             "",
             "FINDING:",
             f"- Title: {vuln.title}",
@@ -295,17 +298,17 @@ class RemedyAgent:
                 lines.append(f"* Attempt {att.attempt_number}: success={att.success} scan_passed={att.scan_passed}")
                 if att.commands_executed:
                     lines.append("  Commands:")
-                    for cmd in att.commands_executed[-4:]:
+                    for cmd in att.commands_executed[-2:]:
                         lines.append(f"    - {cmd}")
                 if att.error_summary:
-                    lines.append(f"  Error: {att.error_summary[:300]}")
+                    lines.append(f"  Error: {att.error_summary[:200]}")
                 if att.scan_output:
-                    lines.append(f"  Scan output: {str(att.scan_output)[:900]}")
+                    lines.append(f"  Scan output: {str(att.scan_output)[:300]}")
 
         if previous_attempts and attempt_number >= 2:
             all_prior_cmds: List[str] = []
             for att in previous_attempts:
-                all_prior_cmds.extend(att.commands_executed[-4:])
+                all_prior_cmds.extend(att.commands_executed[-2:])
             if all_prior_cmds:
                 lines.extend([
                     "",
@@ -313,7 +316,7 @@ class RemedyAgent:
                     "You MUST use a DIFFERENT approach from all prior attempts.",
                     "Do NOT repeat any of these previously-tried commands:",
                 ])
-                for cmd in all_prior_cmds[-8:]:
+                for cmd in all_prior_cmds[-5:]:
                     lines.append(f"  AVOID: {cmd}")
                 lines.append("If direct config-file edits failed, try: authselect, sysctl, systemctl, or package reinstall.")
 
@@ -374,12 +377,30 @@ class RemedyAgent:
     # Tool-calling loop
     # -------------------------
 
+    _MAX_TOOL_OUTPUT_CHARS = 2000
+
+    def _cap_tool_output(self, payload: dict) -> dict:
+        """Cap large tool output fields before they enter the rolling message context.
+
+        The full payload is still saved to transcript for auditing; only what
+        gets sent back to the LLM is capped here.
+        """
+        capped = dict(payload)
+        for field in ("stdout", "stderr", "content"):
+            val = capped.get(field)
+            if isinstance(val, str) and len(val) > self._MAX_TOOL_OUTPUT_CHARS:
+                capped[field] = (
+                    val[: self._MAX_TOOL_OUTPUT_CHARS]
+                    + f"\n[output capped at {self._MAX_TOOL_OUTPUT_CHARS} chars — use grep/head for targeted output]"
+                )
+        return capped
+
     def _run_tool_session(self, *, user_prompt: str, session_label: str, vuln: Vulnerability) -> Dict[str, Any]:
         system_prompt = (
             "You are an adaptive remediation agent on Rocky Linux / RHEL. "
             "Use tools to inspect and remediate the finding.\n"
             "STRATEGY:\n"
-            "1. ALWAYS read the relevant config file FIRST with read_file before making changes.\n"
+            "1. ALWAYS inspect the relevant config file FIRST before making changes — use grep to find the specific key, not read_file on the whole file.\n"
             "2. Identify the exact key/value that needs changing.\n"
             "3. Use write_file for config changes (avoids shell quoting issues) or run_cmd for sed/systemctl.\n"
             "4. Verify with run_cmd (e.g. grep) that the change took effect.\n"
@@ -390,7 +411,13 @@ class RemedyAgent:
             "- Do NOT duplicate config lines. If a key already exists, modify it in-place with sed.\n"
             "- If a key is commented out (# minlen = 8), uncomment and set the correct value.\n"
             "- stderr may contain SSH banners — ignore them. Check exit_code and stdout for results.\n"
-            "- CRITICAL: Do NOT modify SSH config, sshd_config, firewall rules, or SELinux in ways that could block SSH access. Do not disable or mask sshd. The pipeline requires SSH to operate."
+            "- CRITICAL: Do NOT modify SSH config, sshd_config, firewall rules, or SELinux in ways that could block SSH access. Do not disable or mask sshd. The pipeline requires SSH to operate.\n"
+            "OUTPUT SIZE RULES (preserve context window):\n"
+            "- Never dump entire files. Use grep/head/tail to extract only the relevant lines.\n"
+            "  Good: run_cmd 'grep -n \"minlen\" /etc/security/pwquality.conf'\n"
+            "  Bad:  read_file '/etc/security/pwquality.conf'\n"
+            "- For curl/wget downloads, verify with 'file <path>' or 'head -c 100 <path>' — if output looks like HTML, abort and use a different source.\n"
+            "- Avoid commands that produce large output (rpm -qa, find /, ls -laR). Use targeted queries instead."
         )
 
         messages: List[Dict[str, Any]] = [
@@ -516,12 +543,17 @@ class RemedyAgent:
                     "command": cmd_label,
                 })
 
-                tool_entry = {
+                # Full payload goes to transcript for auditing; capped payload goes to LLM.
+                transcript.append({
                     "role": "tool",
                     "tool_call_id": tc["id"],
                     "content": json.dumps(payload),
+                })
+                tool_entry = {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": json.dumps(self._cap_tool_output(payload)),
                 }
-                transcript.append(tool_entry)
                 messages.append(tool_entry)
 
                 tool_calls_used += 1
