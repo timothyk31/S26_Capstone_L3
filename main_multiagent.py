@@ -290,6 +290,11 @@ def parse_args() -> argparse.Namespace:
     agent_g.add_argument("--lenient-triage", action="store_true", default=False,
                          help="Use lenient triage: prefer safe_to_remediate over "
                               "requires_human_review when uncertain (useful for benchmarking)")
+    agent_g.add_argument("--max-complexity", choices=["low", "medium", "high"],
+                         default="medium",
+                         help="Max remediation complexity to attempt automatically. "
+                              "Findings above this threshold are sent to human review. "
+                              "(default: high — no extra filtering)")
 
     # (Concurrency removed — sequential execution to avoid race conditions)
 
@@ -316,6 +321,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     t0 = time.time()
+    run_id = datetime.now().strftime("run_%Y%m%d_%H%M%S")
 
     console.print(Panel.fit(
         "[bold cyan]Multi-Agent Remediation Pipeline V2[/bold cyan]\n"
@@ -480,6 +486,7 @@ def main() -> int:
     triage_agent = TriageAgent(
         mode=args.triage_mode, lenient=args.lenient_triage,
         transcript_dir=transcript_dir / "triage",
+        max_complexity=args.max_complexity,
     )
 
     remedy_agent = RemedyAgent(
@@ -515,6 +522,7 @@ def main() -> int:
         triage_agent=triage_agent,
         remedy_agent_v2=remedy_agent_v2,
         report_dir=agent_report_dir,
+        run_id=run_id,
     )
 
     # ── Batch-then-verify loop ────────────────────────────────────
@@ -531,18 +539,19 @@ def main() -> int:
     state: Dict[str, dict] = {}
     fixed_at_round: Dict[int, List[str]] = {}  # round_num → [vid, ...]
 
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-    )
+    def _make_progress() -> Progress:
+        return Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        )
 
     # ── Round 1: Triage + first attempt (sequential, no scan) ─────
     console.print("[bold cyan]\n── Round 1: Triage + Remedy ──[/bold cyan]")
-    with progress:
+    with _make_progress() as progress:
         task = progress.add_task("Round 1: Triage + Remedy", total=total)
         for vuln in filtered:
             try:
@@ -614,11 +623,12 @@ def main() -> int:
                     }
                 )
                 status = "PASS" if passed else "FAIL"
-                console.print(f"  [{vid}] scan → {status}")
+                rule = s["vulnerability"].rule or vid
+                console.print(f"  [{vid}] ({rule}) scan → {status}")
             # Re-write attempt JSONs with scan results
             for vid, s in state.items():
                 attempt = s["attempts"][-1]
-                out_dir = agent_report_dir / "remedy_v2" / _safe_dirname(vid)
+                out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vid)
                 out_path = out_dir / f"attempt_{attempt.attempt_number}_output.json"
                 if out_dir.exists():
                     out_path.write_text(
@@ -645,7 +655,7 @@ def main() -> int:
             f"failed finding(s) ──[/bold cyan]"
         )
 
-        with progress:
+        with _make_progress() as progress:
             task = progress.add_task(
                 f"Round {round_num}: Retrying failures", total=len(pending),
             )
@@ -706,12 +716,13 @@ def main() -> int:
                     }
                 )
                 status = "PASS" if passed else "FAIL"
-                console.print(f"  [{vid}] scan → {status}")
+                rule = s["vulnerability"].rule or vid
+                console.print(f"  [{vid}] ({rule}) scan → {status}")
             # Re-write attempt JSONs with scan results
             for vid, s in pending.items():
                 if s["attempts"]:
                     attempt = s["attempts"][-1]
-                    out_dir = agent_report_dir / "remedy_v2" / _safe_dirname(vid)
+                    out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vid)
                     out_path = out_dir / f"attempt_{attempt.attempt_number}_output.json"
                     if out_dir.exists():
                         out_path.write_text(

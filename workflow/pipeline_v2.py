@@ -51,11 +51,13 @@ class PipelineV2:
         remedy_agent_v2: RemedyAgentV2,
         *,
         report_dir: Optional[Union[str, Path]] = None,
+        run_id: Optional[str] = None,
     ):
         self.triage = triage_agent
         self.remedy_v2 = remedy_agent_v2
+        self.run_id = run_id
         self._writer: Optional[AgentReportWriter] = (
-            AgentReportWriter(report_dir) if report_dir else None
+            AgentReportWriter(report_dir, run_id=run_id) if report_dir else None
         )
 
     def run(

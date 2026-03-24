@@ -50,7 +50,7 @@ class ShellCommandExecutor:
         text = re.sub(r"\\S\nKernel \\r on an \\m \(\\l\)\n?", "", text)
         # Strip USG / DoD login banners (multi-line block starting with "You are accessing")
         text = re.sub(
-            r"You are accessing a U\.S\. Government.*?See User\s*\nAgreement for details\.\n?",
+            r"You are accessing a U\.S\. Government.*?(?=\n\n|\Z)",
             "",
             text,
             flags=re.DOTALL,
@@ -64,6 +64,10 @@ class ShellCommandExecutor:
             "StrictHostKeyChecking=no",
             "-o",
             "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ServerAliveInterval=30",
+            "-o",
+            "ServerAliveCountMax=5",
             "-p",
             str(self.port),
         ]

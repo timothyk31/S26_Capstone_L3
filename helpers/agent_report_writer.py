@@ -6,24 +6,17 @@ can be reviewed after the pipeline finishes:
 
     <report_root>/
         triage/
-            <finding_id>/
-                input.json
-                output.json
-        remedy/
-            <finding_id>/
-                attempt_1_input.json
-                attempt_1_output.json
-                attempt_2_input.json
-                attempt_2_output.json
-        review/
-            <finding_id>/
-                input.json
-                output.json
-                (or attempt_N_input/output when review triggers retry)
-        qa/
-            <finding_id>/
-                input.json
-                output.json
+            <run_id>/                  ← optional, groups reports by pipeline run
+                <finding_id>/
+                    input.json
+                    output.json
+        remedy_v2/
+            <run_id>/
+                <finding_id>/
+                    attempt_1_input.json
+                    attempt_1_output.json
+                    attempt_2_input.json
+                    attempt_2_output.json
 
 All files are JSON-serialised Pydantic models (via .model_dump()).
 """
@@ -63,9 +56,10 @@ class AgentReportWriter:
         writer.write("remedy", finding_id, input_data, output_data, attempt=1)
     """
 
-    def __init__(self, report_root: Union[str, Path]):
+    def __init__(self, report_root: Union[str, Path], *, run_id: Optional[str] = None):
         self.root = Path(report_root)
         self.root.mkdir(parents=True, exist_ok=True)
+        self._run_id = run_id
 
     def write(
         self,
@@ -89,7 +83,10 @@ class AgentReportWriter:
         Returns:
             Path to the finding subfolder that was written.
         """
-        agent_dir = self.root / agent_name / _safe_dirname(finding_id)
+        base = self.root / agent_name
+        if self._run_id:
+            base = base / self._run_id
+        agent_dir = base / _safe_dirname(finding_id)
         agent_dir.mkdir(parents=True, exist_ok=True)
 
         prefix = f"attempt_{attempt}_" if attempt is not None else ""
@@ -118,7 +115,10 @@ class AgentReportWriter:
         attempt: Optional[int] = None,
     ) -> Path:
         """Write input + error details when an agent raises."""
-        agent_dir = self.root / agent_name / _safe_dirname(finding_id)
+        base = self.root / agent_name
+        if self._run_id:
+            base = base / self._run_id
+        agent_dir = base / _safe_dirname(finding_id)
         agent_dir.mkdir(parents=True, exist_ok=True)
 
         prefix = f"attempt_{attempt}_" if attempt is not None else ""

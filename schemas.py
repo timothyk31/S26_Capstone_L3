@@ -85,6 +85,10 @@ class TriageDecision(BaseModel):
         default=None,
         description="Expected impact of remediation (e.g., 'service restart', 'reboot required')",
     )
+    estimated_complexity: Optional[str] = Field(
+        default=None,
+        description="Estimated remediation complexity: low | medium | high",
+    )
 
 
 # Remedy (needed for ReviewInput)
