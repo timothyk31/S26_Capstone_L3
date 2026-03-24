@@ -8,8 +8,9 @@ Scans a target VM with OpenSCAP, then runs every finding through:
 After each round of fixes, ONE full-profile scan verifies all findings.
 Failures are retried up to --max-remedy-attempts rounds.
 
-All findings are processed sequentially (no parallelism) to avoid race
-conditions from concurrent SSH sessions modifying the same system.
+Triage LLM calls can run in parallel (--triage-workers). Remedy (SSH +
+apply) and batch verification scans stay sequential so one host is not
+modified concurrently.
 
 Produces:
   - Aggregated JSON results
@@ -32,6 +33,9 @@ Usage examples:
   # Limit to first 5 findings, severity >= 3
   python main_multiagent.py --inventory inventory.yml \\
          --max-vulns 5 --min-severity 3
+
+  # Parallel triage (8 workers), sequential remedy — same host, safer than parallel SSH
+  python main_multiagent.py --inventory inventory.yml --triage-workers 8
 """
 
 from __future__ import annotations
@@ -41,9 +45,10 @@ import json
 import os
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 from dotenv import find_dotenv, load_dotenv
@@ -73,7 +78,7 @@ from openscap_cli import OpenSCAPScanner
 from parse_openscap import parse_openscap
 from braintrust_eval_writer import write_braintrust_eval
 from context_pdf_writer import write_all_context_pdfs, _is_ssh_login_finding
-from schemas import TriageDecision, V2FindingResult, Vulnerability
+from schemas import TriageDecision, TriageInput, V2FindingResult, Vulnerability
 from workflow.pipeline_v2 import PipelineV2
 
 load_dotenv(find_dotenv(), override=False)
@@ -280,6 +285,14 @@ def parse_args() -> argparse.Namespace:
                         help="Cap the number of vulnerabilities to process")
     pipe_g.add_argument("--max-remedy-attempts", type=int, default=3,
                         help="Max remedy retries per finding (default: 3)")
+    pipe_g.add_argument(
+        "--triage-workers",
+        type=int,
+        default=4,
+        metavar="N",
+        help="Parallel triage threads (OpenRouter LLM only). Remedy/SSH and scans stay "
+             "sequential. Use 1 for fully sequential triage. Default: 4.",
+    )
 
     # ── Agents ───
     agent_g = p.add_argument_group("Agent options")
@@ -295,8 +308,6 @@ def parse_args() -> argparse.Namespace:
                          help="Max remediation complexity to attempt automatically. "
                               "Findings above this threshold are sent to human review. "
                               "(default: high — no extra filtering)")
-
-    # (Concurrency removed — sequential execution to avoid race conditions)
 
     # ── Output ───
     out = p.add_argument_group("Output")
@@ -314,6 +325,50 @@ def parse_args() -> argparse.Namespace:
                     help="Braintrust project name (default: OpenSCAP-Remediation-Pipeline)")
 
     return p.parse_args()
+
+
+def _triage_one_indexed(
+    index: int,
+    vuln: Vulnerability,
+    triage_agent: TriageAgent,
+) -> Tuple[int, TriageDecision]:
+    try:
+        td = triage_agent.process(TriageInput(vulnerability=vuln))
+    except Exception as exc:
+        td = TriageDecision(
+            finding_id=vuln.id,
+            should_remediate=False,
+            risk_level="medium",
+            reason=f"Triage error: {exc}",
+            requires_human_review=True,
+        )
+    return index, td
+
+
+def triage_in_parallel(
+    vulnerabilities: List[Vulnerability],
+    triage_agent: TriageAgent,
+    max_workers: int,
+) -> List[Tuple[Vulnerability, TriageDecision]]:
+    """Return (vuln, decision) pairs in the same order as *vulnerabilities*."""
+    if not vulnerabilities:
+        return []
+    if max_workers <= 1:
+        return [
+            (v, triage_agent.process(TriageInput(vulnerability=v)))
+            for v in vulnerabilities
+        ]
+    n = len(vulnerabilities)
+    slots: Dict[int, Tuple[Vulnerability, TriageDecision]] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [
+            pool.submit(_triage_one_indexed, i, vulnerabilities[i], triage_agent)
+            for i in range(n)
+        ]
+        for fut in as_completed(futures):
+            idx, td = fut.result()
+            slots[idx] = (vulnerabilities[idx], td)
+    return [slots[i] for i in range(n)]
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -530,9 +585,10 @@ def main() -> int:
     total = len(filtered)
     max_rounds = args.max_remedy_attempts
 
+    tw = max(1, args.triage_workers)
     console.print(
         f"\n[bold cyan]── Running V2 pipeline for {total} finding(s) "
-        f"(sequential, up to {max_rounds} rounds) ──[/bold cyan]\n"
+        f"(triage_workers={tw}, up to {max_rounds} rounds) ──[/bold cyan]\n"
     )
 
     # State tracker per finding
@@ -549,51 +605,105 @@ def main() -> int:
             console=console,
         )
 
-    # ── Round 1: Triage + first attempt (sequential, no scan) ─────
+    def _track_round1_result(vuln: Vulnerability, result: V2FindingResult) -> None:
+        results.append(result)
+        if result.remediation is not None and result.final_status == "pending_scan":
+            state[vuln.id] = {
+                "vulnerability": vuln,
+                "triage": result.triage,
+                "attempts": [result.remediation],
+                "review_verdicts": (
+                    [result.pre_approval.review_verdict]
+                    if result.pre_approval else []
+                ),
+                "review_feedback": (
+                    result.pre_approval.rejection_reason
+                    if result.pre_approval and not result.pre_approval.approved
+                    else None
+                ),
+                "approval": result.pre_approval,
+                "passed": False,
+                "result_index": len(results) - 1,
+            }
+
+    # ── Round 1: Triage + first attempt (no batch scan yet) ────────
     console.print("[bold cyan]\n── Round 1: Triage + Remedy ──[/bold cyan]")
-    with _make_progress() as progress:
-        task = progress.add_task("Round 1: Triage + Remedy", total=total)
-        for vuln in filtered:
-            try:
-                result = pipeline.run(vuln)
-            except Exception as exc:
-                console.print(f"[red]Pipeline error for {vuln.id}: {exc}[/red]")
-                result = V2FindingResult(
-                    vulnerability=vuln,
-                    triage=TriageDecision(
-                        finding_id=vuln.id,
-                        should_remediate=False,
-                        risk_level="medium",
-                        reason=f"Pipeline error: {exc}",
-                        requires_human_review=True,
-                    ),
-                    final_status="failed",
-                    total_duration=0.0,
-                    timestamp=datetime.now().isoformat(timespec="seconds"),
-                )
-            results.append(result)
-
-            # Track state for findings that were actually remediated
-            if result.remediation is not None and result.final_status == "pending_scan":
-                state[vuln.id] = {
-                    "vulnerability": vuln,
-                    "triage": result.triage,
-                    "attempts": [result.remediation],
-                    "review_verdicts": (
-                        [result.pre_approval.review_verdict]
-                        if result.pre_approval else []
-                    ),
-                    "review_feedback": (
-                        result.pre_approval.rejection_reason
-                        if result.pre_approval and not result.pre_approval.approved
-                        else None
-                    ),
-                    "approval": result.pre_approval,
-                    "passed": False,
-                    "result_index": len(results) - 1,
-                }
-
-            progress.advance(task)
+    if tw <= 1:
+        with _make_progress() as progress:
+            task = progress.add_task("Round 1: Triage + Remedy", total=total)
+            for vuln in filtered:
+                try:
+                    result = pipeline.run(vuln)
+                except Exception as exc:
+                    console.print(f"[red]Pipeline error for {vuln.id}: {exc}[/red]")
+                    result = V2FindingResult(
+                        vulnerability=vuln,
+                        triage=TriageDecision(
+                            finding_id=vuln.id,
+                            should_remediate=False,
+                            risk_level="medium",
+                            reason=f"Pipeline error: {exc}",
+                            requires_human_review=True,
+                        ),
+                        final_status="failed",
+                        total_duration=0.0,
+                        timestamp=datetime.now().isoformat(timespec="seconds"),
+                    )
+                _track_round1_result(vuln, result)
+                progress.advance(task)
+    else:
+        console.print(
+            f"[dim]Parallel triage ({tw} workers); remedy and SSH are sequential.[/dim]"
+        )
+        triage_pairs = triage_in_parallel(filtered, triage_agent, tw)
+        with _make_progress() as progress:
+            task = progress.add_task(
+                "Round 1: Remedy (after parallel triage)", total=total,
+            )
+            for vuln, triage_decision in triage_pairs:
+                try:
+                    pipeline.save_triage_report(vuln, triage_decision)
+                    if not triage_decision.should_remediate:
+                        status = (
+                            "requires_human_review"
+                            if triage_decision.requires_human_review
+                            else "discarded"
+                        )
+                        console.print(f"[yellow]  [{vuln.id}] Triage → {status}[/yellow]")
+                        result = V2FindingResult(
+                            vulnerability=vuln,
+                            triage=triage_decision,
+                            final_status=status,
+                            total_duration=0.0,
+                            timestamp=datetime.now().isoformat(timespec="seconds"),
+                        )
+                    else:
+                        console.print(
+                            f"[green]  [{vuln.id}] Triage → safe to remediate "
+                            f"(risk={triage_decision.risk_level})[/green]"
+                        )
+                        result = pipeline.run(
+                            vuln,
+                            triage_decision=triage_decision,
+                            attempt_number=1,
+                        )
+                except Exception as exc:
+                    console.print(f"[red]Pipeline error for {vuln.id}: {exc}[/red]")
+                    result = V2FindingResult(
+                        vulnerability=vuln,
+                        triage=TriageDecision(
+                            finding_id=vuln.id,
+                            should_remediate=False,
+                            risk_level="medium",
+                            reason=f"Pipeline error: {exc}",
+                            requires_human_review=True,
+                        ),
+                        final_status="failed",
+                        total_duration=0.0,
+                        timestamp=datetime.now().isoformat(timespec="seconds"),
+                    )
+                _track_round1_result(vuln, result)
+                progress.advance(task)
 
     # ── Full scan after round 1 ──────────────────────────────────
     if state:

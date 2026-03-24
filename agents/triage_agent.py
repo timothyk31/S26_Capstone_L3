@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import requests
 from dotenv import find_dotenv, load_dotenv
@@ -113,9 +113,11 @@ class _OpenRouterClient:
         if title:
             self.headers["X-Title"] = title
 
-    def classify(self, prompt: str) -> str:
+    def classify(self, prompt: str, *, model: Optional[str] = None) -> Tuple[Any, ...]:
+        """Call chat completions. *model* overrides *self.model* (thread-safe)."""
+        use_model = model if model is not None else self.model
         payload = {
-            "model": self.model,
+            "model": use_model,
             "provider": {"allow_fallbacks": True},
             "response_format": {"type": "json_object"},
             "messages": [
@@ -511,12 +513,12 @@ class TriageAgent(BaseAgent):
         ]
 
         last_err: Optional[str] = None
-        orig_model = self._client.model
 
         for model_name in candidates:
             try:
-                self._client.model = model_name
-                raw, full_message, usage, api_duration = self._client.classify(prompt)
+                raw, full_message, usage, api_duration = self._client.classify(
+                    prompt, model=model_name
+                )
                 js = _extract_json(raw)
                 verdict = _LLMVerdict.model_validate_json(js)
 
@@ -552,8 +554,6 @@ class TriageAgent(BaseAgent):
                 last_err = f"Validation/JSON error with {model_name}: {exc}"
             except Exception as exc:
                 last_err = f"API/runtime error with {model_name}: {exc}"
-            finally:
-                self._client.model = orig_model
 
         # Conservative fallback when all models fail
         self.log_warning(f"LLM triage failed for {vuln.id}; defaulting to human review. ({last_err})")

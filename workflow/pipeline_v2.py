@@ -166,3 +166,17 @@ class PipelineV2:
             total_duration=elapsed,
             timestamp=datetime.now().isoformat(timespec="seconds"),
         )
+
+    def save_triage_report(
+        self,
+        vulnerability: Vulnerability,
+        triage_decision: TriageDecision,
+    ) -> None:
+        """Write triage agent_reports when triage ran outside ``run()`` (e.g. parallel triage)."""
+        if self._writer:
+            self._writer.write(
+                "triage",
+                vulnerability.id,
+                TriageInput(vulnerability=vulnerability),
+                triage_decision,
+            )
