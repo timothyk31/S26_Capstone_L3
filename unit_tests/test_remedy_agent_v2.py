@@ -212,4 +212,40 @@ class TestRemedyAgentV2:
 
         attempt, _ = agent.process(remedy_input)
 
-        assert attempt.duration > 0
+        assert attempt.attempt_duration > 0
+
+    def test_step_durations_recorded(
+        self, agent, mock_remedy_agent, mock_review_v2, remedy_input
+    ):
+        """Verify per-step durations are recorded in llm_metrics."""
+        mock_review_v2.process.return_value = PreApprovalResult(
+            review_verdict=ReviewVerdict(
+                finding_id="auditd_audispd_syslog_plugin_activated",
+                is_optimal=True,
+                approve=True,
+                security_score=9,
+            ),
+            approved=True,
+        )
+
+        attempt, _ = agent.process(remedy_input)
+
+        assert attempt.llm_metrics is not None
+        assert "step_durations" in attempt.llm_metrics
+        steps = attempt.llm_metrics["step_durations"]
+        assert "plan_fix_seconds" in steps
+        assert "review_qa_seconds" in steps
+        assert "apply_fix_seconds" in steps
+        assert all(isinstance(v, float) for v in steps.values())
+
+    def test_step_durations_on_plan_error(
+        self, agent, mock_remedy_agent, mock_review_v2, remedy_input
+    ):
+        """plan_fix crashes → step_durations still has plan_fix_seconds."""
+        mock_remedy_agent.plan_fix.side_effect = RuntimeError("LLM down")
+
+        attempt, approval = agent.process(remedy_input)
+
+        assert approval is None
+        assert attempt.llm_metrics is not None
+        assert "plan_fix_seconds" in attempt.llm_metrics["step_durations"]

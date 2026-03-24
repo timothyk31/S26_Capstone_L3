@@ -66,6 +66,7 @@ from agents.remedy_agent_v2 import RemedyAgentV2
 from agents.review_agent import ReviewAgent
 from agents.review_agent_v2 import ReviewAgentV2
 from agents.triage_agent import TriageAgent
+from helpers.agent_report_writer import _safe_dirname
 from helpers.command_executor import ShellCommandExecutor
 from helpers.scanner import Scanner
 from openscap_cli import OpenSCAPScanner
@@ -343,6 +344,7 @@ def main() -> int:
 
     # ── Scan ──────────────────────────────────────────────────────────
     if not args.skip_scan:
+        initial_scan_t0 = time.time()
         if not run_scan(
             host=host, user=user, key=key, port=port,
             sudo_password=sudo_password,
@@ -351,6 +353,7 @@ def main() -> int:
             remote_report=args.remote_report, local_report=args.local_report,
         ):
             return 1
+        console.print(f"[cyan]Initial scan completed in {time.time() - initial_scan_t0:.1f}s[/cyan]")
 
     # ── Parse findings ────────────────────────────────────────────────
     parsed_json = args.parsed_json
@@ -590,7 +593,10 @@ def main() -> int:
             f"({len(state)} findings remediated) ──[/bold cyan]"
         )
         try:
+            scan_t0 = time.time()
             scan_findings = scanner.scan_full_profile()
+            scan_duration = round(time.time() - scan_t0, 3)
+            console.print(f"  Scan completed in {scan_duration:.1f}s")
             for vid, s in state.items():
                 passed = Scanner.match_finding(s["vulnerability"], scan_findings)
                 if passed and not s["passed"]:
@@ -598,6 +604,7 @@ def main() -> int:
                 s["passed"] = passed
                 s["attempts"][-1].scan_passed = passed
                 s["attempts"][-1].success = passed
+                s["attempts"][-1].scan_duration = scan_duration
                 # Update the result
                 idx = s["result_index"]
                 results[idx] = results[idx].model_copy(
@@ -608,6 +615,16 @@ def main() -> int:
                 )
                 status = "PASS" if passed else "FAIL"
                 console.print(f"  [{vid}] scan → {status}")
+            # Re-write attempt JSONs with scan results
+            for vid, s in state.items():
+                attempt = s["attempts"][-1]
+                out_dir = agent_report_dir / "remedy_v2" / _safe_dirname(vid)
+                out_path = out_dir / f"attempt_{attempt.attempt_number}_output.json"
+                if out_dir.exists():
+                    out_path.write_text(
+                        json.dumps(attempt.model_dump(mode="json"), indent=2, default=str),
+                        encoding="utf-8",
+                    )
         except Exception as exc:
             console.print(f"[red]Full-profile scan failed: {exc}[/red]")
             for vid, s in state.items():
@@ -668,7 +685,10 @@ def main() -> int:
             f"\n[bold cyan]── Full-profile scan (round {round_num}) ──[/bold cyan]"
         )
         try:
+            scan_t0 = time.time()
             scan_findings = scanner.scan_full_profile()
+            scan_duration = round(time.time() - scan_t0, 3)
+            console.print(f"  Scan completed in {scan_duration:.1f}s")
             for vid, s in pending.items():
                 passed = Scanner.match_finding(s["vulnerability"], scan_findings)
                 if passed and not s["passed"]:
@@ -677,6 +697,7 @@ def main() -> int:
                 if s["attempts"]:
                     s["attempts"][-1].scan_passed = passed
                     s["attempts"][-1].success = passed
+                    s["attempts"][-1].scan_duration = scan_duration
                 idx = s["result_index"]
                 results[idx] = results[idx].model_copy(
                     update={
@@ -686,6 +707,17 @@ def main() -> int:
                 )
                 status = "PASS" if passed else "FAIL"
                 console.print(f"  [{vid}] scan → {status}")
+            # Re-write attempt JSONs with scan results
+            for vid, s in pending.items():
+                if s["attempts"]:
+                    attempt = s["attempts"][-1]
+                    out_dir = agent_report_dir / "remedy_v2" / _safe_dirname(vid)
+                    out_path = out_dir / f"attempt_{attempt.attempt_number}_output.json"
+                    if out_dir.exists():
+                        out_path.write_text(
+                            json.dumps(attempt.model_dump(mode="json"), indent=2, default=str),
+                            encoding="utf-8",
+                        )
         except Exception as exc:
             console.print(f"[red]Full-profile scan failed: {exc}[/red]")
 
@@ -750,7 +782,7 @@ def main() -> int:
             rm = r.remediation
             text_lines.append(
                 f"   Remedy: attempt #{rm.attempt_number}, scan_passed={rm.scan_passed}, "
-                f"cmds={len(rm.commands_executed)}, duration={rm.duration:.1f}s"
+                f"cmds={len(rm.commands_executed)}, duration={rm.attempt_duration:.1f}s"
             )
             for cmd in rm.commands_executed:
                 text_lines.append(f"     - {cmd}")

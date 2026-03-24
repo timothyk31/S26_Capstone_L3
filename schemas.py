@@ -109,10 +109,12 @@ class RemediationAttempt(BaseModel):
     execution_details: List[RunCommandResult] = Field(default_factory=list)
     scan_passed: bool = False
     scan_output: Optional[str] = None
-    duration: float = 0.0
+    attempt_duration: float = 0.0
+    scan_duration: Optional[float] = None
     success: bool = False
     error_summary: Optional[str] = None
     llm_verdict: Optional[ToolVerdict] = None
+    llm_metrics: Optional[Dict[str, Any]] = None
 
 
 # Review Agent

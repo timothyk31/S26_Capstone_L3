@@ -67,23 +67,28 @@ class RemedyAgentV2:
             f"[bold cyan]  [{vid}] V2 Remedy: planning fix "
             f"(attempt {input_data.attempt_number})[/bold cyan]"
         )
+        plan_t0 = time.time()
         try:
             plan_text = self.remedy_agent.plan_fix(input_data)
         except Exception as exc:
+            plan_duration = round(time.time() - plan_t0, 3)
             console.print(f"[red]  [{vid}] Plan generation error: {exc}[/red]")
             return (
                 RemediationAttempt(
                     finding_id=vid,
                     attempt_number=input_data.attempt_number,
                     error_summary=str(exc),
+                    llm_metrics={"step_durations": {"plan_fix_seconds": plan_duration}},
                 ),
                 None,
             )
+        plan_duration = round(time.time() - plan_t0, 3)
 
         # ── Step 2: Consult Review+QA on the plan ─────────────────
         console.print(
             f"[bold cyan]  [{vid}] V2 Remedy: consulting Review+QA on plan[/bold cyan]"
         )
+        review_t0 = time.time()
         stub_attempt = RemediationAttempt(
             finding_id=vid,
             attempt_number=input_data.attempt_number,
@@ -98,6 +103,7 @@ class RemedyAgentV2:
         advisory = self.review_v2.process(
             review_input, attempt=input_data.attempt_number
         )
+        review_duration = round(time.time() - review_t0, 3)
 
         # ── Step 3: Only inject feedback if advisory FAILED ───────
         if not advisory.approved:
@@ -140,18 +146,35 @@ class RemedyAgentV2:
         console.print(
             f"[bold cyan]  [{vid}] V2 Remedy: applying fix[/bold cyan]"
         )
+        apply_t0 = time.time()
         try:
             attempt = self.remedy_agent.process(enriched_input)
         except Exception as exc:
+            apply_duration = round(time.time() - apply_t0, 3)
             console.print(f"[red]  [{vid}] Remedy execution error: {exc}[/red]")
             return (
                 RemediationAttempt(
                     finding_id=vid,
                     attempt_number=input_data.attempt_number,
                     error_summary=str(exc),
+                    llm_metrics={"step_durations": {
+                        "plan_fix_seconds": plan_duration,
+                        "review_qa_seconds": review_duration,
+                        "apply_fix_seconds": apply_duration,
+                    }},
                 ),
                 advisory,
             )
+        apply_duration = round(time.time() - apply_t0, 3)
 
-        attempt.duration = time.time() - start
+        # Merge step durations into llm_metrics
+        if attempt.llm_metrics is None:
+            attempt.llm_metrics = {}
+        attempt.llm_metrics["step_durations"] = {
+            "plan_fix_seconds": plan_duration,
+            "review_qa_seconds": review_duration,
+            "apply_fix_seconds": apply_duration,
+        }
+
+        attempt.attempt_duration = time.time() - start
         return attempt, advisory

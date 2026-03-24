@@ -141,11 +141,13 @@ class PipelineV2:
 
         if self._writer:
             try:
+                # Exclude scan fields — they're populated later by the batch scan
+                dump = remediation.model_dump(mode="json", exclude={"scan_passed", "scan_output", "scan_duration"}) if remediation else remediation
                 self._writer.write(
-                    "remedy_v2", vid, remedy_input, remediation, attempt=attempt_number,
+                    "remedy_v2", vid, remedy_input, dump, attempt=attempt_number,
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                console.print(f"[red]  [{vid}] Report write error: {exc}[/red]")
 
         elapsed = time.time() - t0
         console.print(

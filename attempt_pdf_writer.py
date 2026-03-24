@@ -158,7 +158,7 @@ def write_attempt_pdf(
 
         # ── Commands ──────────────────────────────────────────────────
         cmd_rows = [
-            ["Duration", f"{att.duration:.1f}s"],
+            ["Duration", f"{att.attempt_duration:.1f}s"],
             ["Commands", str(len(att.commands_executed))],
         ]
         for ci, cmd in enumerate(att.commands_executed):

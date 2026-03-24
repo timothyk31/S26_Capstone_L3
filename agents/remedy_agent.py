@@ -125,7 +125,7 @@ class RemedyAgent:
             execution_details=[],
             scan_passed=False,
             scan_output=None,
-            duration=0.0,
+            attempt_duration=0.0,
             success=False,
             error_summary=None,
             llm_verdict=None,
@@ -152,6 +152,7 @@ class RemedyAgent:
         attempt.files_read = session_result["files_read"]
         attempt.execution_details = session_result["execution_details"]
         attempt.llm_verdict = ToolVerdict(message=session_result.get("final_message", ""), resolved=False)
+        attempt.llm_metrics = session_result.get("llm_metrics")
 
         # Scan is NOT run here — batch-then-verify handles scanning
         # after all findings in a round are remediated.
@@ -159,7 +160,7 @@ class RemedyAgent:
         attempt.scan_output = None
         attempt.success = False
 
-        attempt.duration = time.time() - start
+        attempt.attempt_duration = time.time() - start
 
         # Save transcript/log
         usage_records = session_result.get("usage", [])
@@ -404,6 +405,7 @@ class RemedyAgent:
         execution_details: List[RunCommandResult] = []
         final_message: str = ""
         usage_records: List[Dict[str, Any]] = []
+        turn_records: List[Dict[str, Any]] = []
 
         tool_calls_used = 0
         total_turns = 0  # Counts ALL LLM round-trips (tool + reasoning)
@@ -478,6 +480,7 @@ class RemedyAgent:
                     commands_executed.append(result.command)
                     execution_details.append(result)
                     payload = result.model_dump()
+                    cmd_label = command
 
                 elif name == "read_file":
                     path = (args.get("path") or "").strip()
@@ -485,6 +488,7 @@ class RemedyAgent:
                     files_read.append(path)
                     execution_details.append(result)
                     payload = result.model_dump()
+                    cmd_label = path
 
                 elif name == "write_file":
                     path = (args.get("path") or "").strip()
@@ -494,9 +498,23 @@ class RemedyAgent:
                     files_modified.append(path)
                     execution_details.append(result)
                     payload = result.model_dump()
+                    cmd_label = path
 
                 else:
                     payload = {"error": f"Unknown tool {name}"}
+                    cmd_label = ""
+
+                # Record per-turn timing metrics
+                api_s = round(_turn_duration, 3)
+                cmd_s = round(result.duration, 3) if hasattr(result, "duration") else 0.0
+                turn_records.append({
+                    "turn": total_turns,
+                    "api_seconds": api_s,
+                    "cmd_seconds": cmd_s,
+                    "total": round(api_s + cmd_s, 3),
+                    "tool": name,
+                    "command": cmd_label,
+                })
 
                 tool_entry = {
                     "role": "tool",
@@ -521,6 +539,12 @@ class RemedyAgent:
             "execution_details": execution_details,
             "final_message": final_message,
             "usage": usage_records,
+            "llm_metrics": {
+                "total_llm_api_seconds": round(sum(r["api_seconds"] for r in turn_records), 3),
+                "total_command_execution_seconds": round(sum(r["cmd_seconds"] for r in turn_records), 3),
+                "llm_calls": len(usage_records),
+                "per_turn": turn_records,
+            },
         }
 
     def _chat(self, messages: List[Dict[str, Any]], _retries: int = 3) -> Dict[str, Any]:
@@ -679,7 +703,7 @@ class RemedyAgent:
                     Paragraph(r.vulnerability.title or "\u2014", cell_style),
                     Paragraph(str(rm.attempt_number), cell_style),
                     Paragraph(scan_text, cell_style),
-                    Paragraph(f"{rm.duration:.1f}s", cell_style),
+                    Paragraph(f"{rm.attempt_duration:.1f}s", cell_style),
                     Paragraph(cmds_text, cell_style),
                     Paragraph(files_text, cell_style),
                     Paragraph(rm.error_summary or "\u2014", cell_style),

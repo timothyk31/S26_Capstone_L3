@@ -207,7 +207,7 @@ def write_summary_pdf(
                 detail_rows.append([
                     f"Attempt #{att.attempt_number}",
                     f"scan_passed={att.scan_passed}, "
-                    f"cmds={len(att.commands_executed)}, {att.duration:.1f}s",
+                    f"cmds={len(att.commands_executed)}, {att.attempt_duration:.1f}s",
                 ])
                 if cmds_str:
                     detail_rows.append(["  Commands", _wrap(_esc(cmds_str), 90)])
@@ -221,7 +221,7 @@ def write_summary_pdf(
             detail_rows.append([
                 "Remedy",
                 f"attempt #{rm.attempt_number}, scan_passed={rm.scan_passed}, "
-                f"cmds={len(rm.commands_executed)}, {rm.duration:.1f}s",
+                f"cmds={len(rm.commands_executed)}, {rm.attempt_duration:.1f}s",
             ])
             if cmds_str:
                 detail_rows.append(["Commands", _wrap(_esc(cmds_str), 90)])
