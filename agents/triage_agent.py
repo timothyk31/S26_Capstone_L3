@@ -26,7 +26,7 @@ from typing import Any, Dict, List, Literal, Optional, Tuple
 
 import requests
 from dotenv import find_dotenv, load_dotenv
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import AliasChoices, BaseModel, Field, ValidationError, field_validator
 
 from agents.base_agent import BaseAgent
 from schemas import TriageDecision, TriageInput, Vulnerability
@@ -46,7 +46,8 @@ TriageCategory = Literal[
 
 class _LLMVerdict(BaseModel):
     """Schema the LLM is told to return — mapped to TriageDecision after."""
-    finding_id: str
+    model_config = {"populate_by_name": True}
+    finding_id: str = Field(..., validation_alias=AliasChoices("finding_id", "findings_id"))
     rule_id: str
     category: TriageCategory
     confidence: float = Field(..., ge=0.0, le=1.0)
@@ -61,6 +62,21 @@ class _LLMVerdict(BaseModel):
         default="medium",
         description="Estimated remediation complexity: low | medium | high",
     )
+
+    @field_validator(
+        "requires_reboot",
+        "touches_authn_authz",
+        "touches_networking",
+        "touches_filesystems",
+        mode="before",
+    )
+    @classmethod
+    def _coerce_bool(cls, v: object) -> bool:
+        if isinstance(v, str):
+            if v.strip().lower() in ("", "null", "none"):
+                return False
+            return v.strip().lower() in ("true", "1", "yes")
+        return bool(v)
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +188,36 @@ def _extract_json(text: str) -> str:
     text = text.strip()
     text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
     text = re.sub(r"\s*```$", "", text)
-    if text.startswith("{") and text.endswith("}"):
+
+    # Find the outermost balanced { ... } block
+    start = text.find("{")
+    if start == -1:
         return text
-    m = re.search(r"\{.*\}", text, flags=re.DOTALL)
-    return m.group(0).strip() if m else text
+    depth = 0
+    end = start
+    for i in range(start, len(text)):
+        if text[i] == "{":
+            depth += 1
+        elif text[i] == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+    candidate = text[start : end + 1]
+
+    # If the LLM wrapped the answer inside a reasoning key (e.g. {"analysis": ...}),
+    # try to parse it and look for the actual verdict fields inside.
+    try:
+        obj = json.loads(candidate)
+        if isinstance(obj, dict) and "finding_id" not in obj and "findings_id" not in obj:
+            # Check if there's a nested dict that looks like the verdict
+            for v in obj.values():
+                if isinstance(v, dict) and ("finding_id" in v or "findings_id" in v):
+                    return json.dumps(v)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    return candidate
 
 
 def _vuln_text_blob(v: Vulnerability) -> str:
