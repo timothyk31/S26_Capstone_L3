@@ -156,6 +156,19 @@
     "recommendation": "Remediation script: # The two fingerprints below are retrieved from https://access.redhat.com/security/team/key readonly REDHAT_RELEASE_FINGERPRINT=\"567E347AD0044ADE55BA8A5F199E2F91FD431D51\" readonly REDHAT_AUXILIARY_FINGERPRINT=\"7E4624258C406535D56D6F135054E4A45A6340B3\" # Location of the key we would like to import (once it's integrity verified) readonly REDHAT_RELEASE_KEY=\"/etc/pki/rpm-gpg/RPM-GPG-KEY-redhat-release\" RPM_GPG_DIR_PERMS=$(stat -c %a \"$(dirname \"$REDHAT_RELEASE_KEY\")\") # Verify /etc/pki/rpm-gpg directory permissions are safe if [ \"${RPM_GPG_DIR_PERMS}\" -le \"755\" ] then # If they are safe, try to obtain fingerprints from the key file # (to ensure there won't be e.g. CRC error). readarray -t GPG_OUT < <(gpg --show-keys --with-fingerprint --with-colons \"$REDHAT_RELEASE_KEY\" | grep -A1 \"^pub\" | gr"
   },
   {
+    "id": "enable_authselect",
+    "title": "Enable authselect",
+    "description": "Configure user authentication setup to use the authselect tool. If authselect profile is selected, the rule will enable the profile.",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_enable_authselect",
+    "rule": "enable_authselect",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then var_authselect_profile='' authselect current if test \"$?\" -ne 0; then if { rpm --quiet -q kernel rpm-ostree bootc && ! rpm --quiet -q openshift-kubelet && { [ -f \"/run/.containerenv\" ] || [ -f \"/.containerenv\" ]; }; }; then authselect select --force \"$var_authselect_profile\" else authselect select \"$var_authselect_profile\" fi if test \"$?\" -ne 0; then if rpm --quiet --verify pam; then authselect select --force \"$var_authselect_profile\" else echo \"authselect is not used but files from the 'pam' package have been altered, so the authselect configuration won't be forced.\" >&2 fi fi fi else >&2 echo 'Remediation is not applicable, nothing was done' fi"
+  },
+  {
     "id": "banner_etc_issue",
     "title": "Modify the System Login Banner",
     "description": "To configure the system login banner edit /etc/issue. Replace the default text with a message compliant with the local site policy or a legal disclaimer. The DoD required text is either: You are accessing a U.S. Government (USG) Information System (IS) that is provided for USG-authorized use only. By using this IS (which includes any device attached to this IS), you consent to the following conditions: -The USG routinely intercepts and monitors communications on this IS for purposes including, but not limited to, penetration testing, COMSEC monitoring, network operations and defense, personnel misconduct (PM), law enforcement (LE), and counterintelligence (CI) investigations. -At any time, the USG may inspect and seize data stored on this IS. -Communications using, or data stored on, this IS are not private, are subject to routine monitoring, interception, and search, and may be disclosed or used for any USG-authorized purpose. -This IS includes security measures (e.g., authentication and access controls) to protect USG interests -- not for your personal benefit or privacy. -Notwithstanding the above, using this IS does not constitute consent to PM, LE or CI investigative searching or monitoring of the content of privileged communications, or work product, related to personal representation or services by attorneys, psychotherapists, or clergy, and their assistants. Such communications and work product are private and confidential. See User Agreement for details. OR: I've read & consent to terms in IS user agreem't.",
@@ -167,6 +180,19 @@
     "host": "localhost",
     "os": "localhost.localdomain",
     "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then login_banner_text='' # Multiple regexes transform the banner regex into a usable banner # 0 - Remove anchors around the banner text login_banner_text=$(echo \"$login_banner_text\" | sed 's/^\\^\\(.*\\)\\$$/\\1/g') # 1 - Keep only the first banners if there are multiple # (dod_banners contains the long and short banner) login_banner_text=$(echo \"$login_banner_text\" | sed 's/^(\\(.*\\.\\)|.*)$/\\1/g') # 2 - Add spaces ' '. (Transforms regex for \"space or newline\" into a \" \") login_banner_text=$(echo \"$login_banner_text\" | sed 's/\\[\\\\s\\\\n\\]+/ /g') # 3 - Adds newlines. (Transforms \"(?:\\[\\\\n\\]+|(?:\\\\n)+)\" into \"\\n\") login_banner_text=$(echo \"$login_banner_text\" | sed 's/(?:\\[\\\\n\\]+|(?:\\\\\\\\n)+)/\\n/g') # 4 - Remove any"
+  },
+  {
+    "id": "accounts_password_pam_minclass",
+    "title": "Ensure PAM Enforces Password Requirements - Minimum Different Categories",
+    "description": "The pam_pwquality module's minclass parameter controls requirements for usage of different character classes, or types, of character that must exist in a password before it is considered valid. For example, setting this value to three (3) requires that any password must have characters from at least three different categories in order to be approved. The default value is zero (0), meaning there are no required classes. There are four categories available: * Upper-case characters * Lower-case characters * Digits * Special characters (for example, punctuation) Modify the minclass setting in /etc/security/pwquality.conf entry to require differing categories of characters when changing passwords.",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_accounts_password_pam_minclass",
+    "rule": "accounts_password_pam_minclass",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core && { rpm --quiet -q libpwquality; }; then var_password_pam_minclass='' if grep -sq minclass /etc/security/pwquality.conf.d/*.conf ; then sed -i \"/minclass/d\" /etc/security/pwquality.conf.d/*.conf fi # Strip any search characters in the key arg so that the key can be replaced without # adding any search characters to the config file. stripped_key=$(sed 's/[\\^=\\$,;+]*//g' <<< \"^minclass\") # shellcheck disable=SC2059 printf -v formatted_output \"%s = %s\" \"$stripped_key\" \"$var_password_pam_minclass\" # If the key exists, change it. Otherwise, add it to the config_file. # We search for the key string followed by a word boundary (matched by \\>), # so if we search for 'setting', 'setting2' won't match. if LC_ALL=C g"
   },
   {
     "id": "accounts_password_pam_minlen",
@@ -186,7 +212,7 @@
     "title": "Configure Logind to terminate idle sessions after certain time of inactivity",
     "description": "To configure logind service to terminate inactive user sessions after seconds, edit the file /etc/systemd/logind.conf. Ensure that there is a section [Login] which contains the configuration StopIdleSessionSec= .",
     "severity": "2",
-    "result": "error",
+    "result": "fail",
     "oval_id": "xccdf_org.ssgproject.content_rule_logind_session_timeout",
     "rule": "logind_session_timeout",
     "class": "compliance",
@@ -206,6 +232,19 @@
     "host": "localhost",
     "os": "localhost.localdomain",
     "recommendation": "Review and remediate: Only Authorized Local User Accounts Exist on Operating System"
+  },
+  {
+    "id": "file_permission_user_init_files_root",
+    "title": "Ensure All User Initialization Files Have Mode 0740 Or Less Permissive",
+    "description": "Set the mode of the user initialization files, including the root user, to 0740 with the following commands: $ sudo chmod 0740 /root/.INIT_FILE $ sudo chmod 0740 /home/USER/.INIT_FILE",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_file_permission_user_init_files_root",
+    "rule": "file_permission_user_init_files_root",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: var_user_initialization_files_regex='' readarray -t interactive_users < <(awk -F: '$3==0 || $3>=1000 {print $1}' /etc/passwd) readarray -t interactive_users_home < <(awk -F: '$3==0 || $3>=1000 {print $6}' /etc/passwd) readarray -t interactive_users_shell < <(awk -F: '$3==0 || $3>=1000 {print $7}' /etc/passwd) USERS_IGNORED_REGEX='nobody|nfsnobody' for (( i=0; i<\"${#interactive_users[@]}\"; i++ )); do if ! grep -qP \"$USERS_IGNORED_REGEX\" <<< \"${interactive_users[$i]}\" && \\ [ \"${interactive_users_shell[$i]}\" != \"/sbin/nologin\" ]; then readarray -t init_files < <(find \"${interactive_users_home[$i]}\" -maxdepth 1 \\ -exec basename {} \\; | grep -P \"$var_user_initialization_files_regex\") for file in \"${init_files[@]}\"; do chmod u-s,g-wxs,o= \"${interactive_users_home[$i]}/$file\" done fi done"
   },
   {
     "id": "accounts_umask_etc_profile",
@@ -247,6 +286,19 @@
     "recommendation": "Review and remediate: Set Boot Loader Password in grub2"
   },
   {
+    "id": "network_configure_name_resolution",
+    "title": "Configure Multiple DNS Servers in /etc/resolv.conf",
+    "description": "Determine whether the system is using local or DNS name resolution with the following command: $ sudo grep hosts /etc/nsswitch.conf hosts: files dns If the DNS entry is missing from the host's line in the \"/etc/nsswitch.conf\" file, the \"/etc/resolv.conf\" file must be empty. Verify the \"/etc/resolv.conf\" file is empty with the following command: $ sudo ls -al /etc/resolv.conf -rw-r--r-- 1 root root 0 Aug 19 08:31 resolv.conf If the DNS entry is found on the host's line of the \"/etc/nsswitch.conf\" file, then verify the following: Multiple Domain Name System (DNS) Servers should be configured in /etc/resolv.conf. This provides redundant name resolution services in the event that a domain server crashes. To configure the system to contain as least 2 DNS servers, add a corresponding nameserver ip_address entry in /etc/resolv.conf for each DNS server where ip_address is the IP address of a valid DNS server. For example: search example.com nameserver 192.168.0.1 nameserver 192.168.0.2",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_network_configure_name_resolution",
+    "rule": "network_configure_name_resolution",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Review and remediate: Configure Multiple DNS Servers in /etc/resolv.conf"
+  },
+  {
     "id": "sysctl_net_ipv4_conf_all_accept_redirects",
     "title": "Disable Accepting ICMP Redirects for All IPv4 Interfaces",
     "description": "To set the runtime status of the net.ipv4.conf.all.accept_redirects kernel parameter, run the following command: $ sudo sysctl -w net.ipv4.conf.all.accept_redirects=0 To make sure that the setting is persistent, add the following line to a file in the directory /etc/sysctl.d: net.ipv4.conf.all.accept_redirects = 0",
@@ -260,32 +312,6 @@
     "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then # Comment out any occurrences of net.ipv4.conf.all.accept_redirects from /etc/sysctl.d/*.conf files for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf; do # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf) if [[ \"$(readlink -f \"$f\")\" == \"/etc/sysctl.conf\" ]]; then continue; fi matching_list=$(grep -P '^(?!#).*[\\s]*net.ipv4.conf.all.accept_redirects.*$' $f | uniq ) if ! test -z \"$matching_list\"; then while IFS= read -r entry; do escaped_entry=$(sed -e 's|/|\\\\/|g' <<< \"$entry\") # comment out \"net.ipv4.conf.all.accept_redirects\" matches to preserve user data sed -i --follow-symlinks \"s/^${escaped_entry}$/# &/g\" $f done <<< \"$matching_list\" fi d"
   },
   {
-    "id": "dir_perms_world_writable_root_owned",
-    "title": "Ensure All World-Writable Directories Are Owned by root User",
-    "description": "All directories in local partitions which are world-writable should be owned by root. If any world-writable directories are not owned by root, this should be investigated. Following this, the files should be deleted or assigned to root user.",
-    "severity": "2",
-    "result": "fail",
-    "oval_id": "xccdf_org.ssgproject.content_rule_dir_perms_world_writable_root_owned",
-    "rule": "dir_perms_world_writable_root_owned",
-    "class": "compliance",
-    "host": "localhost",
-    "os": "localhost.localdomain",
-    "recommendation": "Remediation script: # At least under containerized env /proc can have files w/o possilibity to # modify even as root. And touching /proc is not good idea anyways. find / -path /proc -prune -o \\ -not -fstype afs -not -fstype autofs -not -fstype ceph -not -fstype cifs -not -fstype smb3 \\ -not -fstype smbfs -not -fstype sshfs -not -fstype ncpfs -not -fstype ncp -not -fstype nfs \\ -not -fstype nfs4 -not -fstype gfs -not -fstype gfs2 -not -fstype glusterfs -not -fstype gpfs \\ -not -fstype pvfs2 -not -fstype ocfs2 -not -fstype lustre -not -fstype davfs \\ -not -fstype fuse.sshfs -type d -perm -0002 -uid +0 -exec chown root {} \\;"
-  },
-  {
-    "id": "dir_perms_world_writable_sticky_bits",
-    "title": "Verify that All World-Writable Directories Have Sticky Bits Set",
-    "description": "When the so-called 'sticky bit' is set on a directory, only the owner of a given file may remove that file from the directory. Without the sticky bit, any user with write access to a directory may remove any file in the directory. Setting the sticky bit prevents users from removing each other's files. In cases where there is no reason for a directory to be world-writable, a better solution is to remove that permission rather than to set the sticky bit. However, if a directory is used by a particular application, consult that application's documentation instead of blindly changing modes. To set the sticky bit on a world-writable directory DIR, run the following command: $ sudo chmod +t DIR",
-    "severity": "2",
-    "result": "fail",
-    "oval_id": "xccdf_org.ssgproject.content_rule_dir_perms_world_writable_sticky_bits",
-    "rule": "dir_perms_world_writable_sticky_bits",
-    "class": "compliance",
-    "host": "localhost",
-    "os": "localhost.localdomain",
-    "recommendation": "Remediation script: df --local -P | awk '{if (NR!=1) print $6}' \\ | xargs -I '$6' find '$6' -xdev -type d \\ \\( -perm -0002 -a ! -perm -1000 \\) 2>/dev/null \\ -exec chmod a+t {} +"
-  },
-  {
     "id": "file_permissions_etc_shadow",
     "title": "Verify Permissions on shadow File",
     "description": "To properly set the permissions of /etc/shadow, run the command: $ sudo chmod 0000 /etc/shadow",
@@ -297,6 +323,19 @@
     "host": "localhost",
     "os": "localhost.localdomain",
     "recommendation": "Remediation script: chmod u-xwrs,g-xwrs,o-xwrt /etc/shadow"
+  },
+  {
+    "id": "mount_option_boot_efi_nosuid",
+    "title": "Add nosuid Option to /boot/efi",
+    "description": "The nosuid mount option can be used to prevent execution of setuid programs in /boot/efi. The SUID and SGID permissions should not be required on the boot partition. Add the nosuid option to the fourth column of /etc/fstab for the line which controls mounting of /boot/efi.",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_mount_option_boot_efi_nosuid",
+    "rule": "mount_option_boot_efi_nosuid",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if ( ! ( { rpm --quiet -q kernel-core ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} && ([ -f /run/ostree-booted ] || [ -L /ostree ]) ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel \"/boot/efi\" > /dev/null || findmnt --fstab \"/boot/efi\" > /dev/null; }; then function perform_remediation { # the mount point /boot/efi has to be defined in /etc/fstab # before this remediation can be executed. In case it is not defined, the # remediation aborts and no changes regarding the mount point are done. mount_point_match_regexp=\"$(printf \"^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]\" \"/boot/efi\")\" grep \"$mount_point_match_regexp\" -q /etc/fstab \\ || { echo "
   },
   {
     "id": "mount_option_boot_nodev",
@@ -338,6 +377,58 @@
     "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if ( ! ( { rpm --quiet -q kernel-core ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} && ([ -f /run/ostree-booted ] || [ -L /ostree ]) ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ); then function perform_remediation { mount_point_match_regexp=\"$(printf \"^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]\" /dev/shm)\" # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab if ! grep -q \"$mount_point_match_regexp\" /etc/fstab; then # runtime opts without some automatic kernel/userspace-added defaults previous_mount_opts=$(grep \"$mount_point_match_regexp\" /etc/mtab | head -1 | awk '{print $4}' \\ | sed -E \"s/(rw|defaults|seclabel|noexec)(,|$)//g;s"
   },
   {
+    "id": "mount_option_home_nodev",
+    "title": "Add nodev Option to /home",
+    "description": "The nodev mount option can be used to prevent device files from being created in /home. Legitimate character and block devices should exist only in the /dev directory on the root partition or within chroot jails built for system services. Add the nodev option to the fourth column of /etc/fstab for the line which controls mounting of /home.",
+    "severity": "0",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_mount_option_home_nodev",
+    "rule": "mount_option_home_nodev",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if ( ! ( { rpm --quiet -q kernel-core ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} && ([ -f /run/ostree-booted ] || [ -L /ostree ]) ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel \"/home\" > /dev/null || findmnt --fstab \"/home\" > /dev/null; }; then function perform_remediation { # the mount point /home has to be defined in /etc/fstab # before this remediation can be executed. In case it is not defined, the # remediation aborts and no changes regarding the mount point are done. mount_point_match_regexp=\"$(printf \"^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]\" \"/home\")\" grep \"$mount_point_match_regexp\" -q /etc/fstab \\ || { echo \"The mount point"
+  },
+  {
+    "id": "mount_option_home_noexec",
+    "title": "Add noexec Option to /home",
+    "description": "The noexec mount option can be used to prevent binaries from being executed out of /home. Add the noexec option to the fourth column of /etc/fstab for the line which controls mounting of /home.",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_mount_option_home_noexec",
+    "rule": "mount_option_home_noexec",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if ( ! ( { rpm --quiet -q kernel-core ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} && ([ -f /run/ostree-booted ] || [ -L /ostree ]) ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ); then function perform_remediation { # the mount point /home has to be defined in /etc/fstab # before this remediation can be executed. In case it is not defined, the # remediation aborts and no changes regarding the mount point are done. mount_point_match_regexp=\"$(printf \"^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]\" \"/home\")\" grep \"$mount_point_match_regexp\" -q /etc/fstab \\ || { echo \"The mount point '/home' is not even in /etc/fstab, so we can't set up mount options\" >&2; echo \"Not"
+  },
+  {
+    "id": "mount_option_home_nosuid",
+    "title": "Add nosuid Option to /home",
+    "description": "The nosuid mount option can be used to prevent execution of setuid programs in /home. The SUID and SGID permissions should not be required in these user data directories. Add the nosuid option to the fourth column of /etc/fstab for the line which controls mounting of /home.",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_mount_option_home_nosuid",
+    "rule": "mount_option_home_nosuid",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if ( ! ( { rpm --quiet -q kernel-core ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} && ([ -f /run/ostree-booted ] || [ -L /ostree ]) ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ) && { findmnt --kernel \"/home\" > /dev/null || findmnt --fstab \"/home\" > /dev/null; }; then function perform_remediation { # the mount point /home has to be defined in /etc/fstab # before this remediation can be executed. In case it is not defined, the # remediation aborts and no changes regarding the mount point are done. mount_point_match_regexp=\"$(printf \"^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]\" \"/home\")\" grep \"$mount_point_match_regexp\" -q /etc/fstab \\ || { echo \"The mount point"
+  },
+  {
+    "id": "mount_option_nodev_nonroot_local_partitions",
+    "title": "Add nodev Option to Non-Root Local Partitions",
+    "description": "The nodev mount option prevents files from being interpreted as character or block devices. Legitimate character and block devices should exist only in the /dev directory on the root partition or within chroot jails built for system services. Add the nodev option to the fourth column of /etc/fstab for the line which controls mounting of any non-root local partitions.",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_mount_option_nodev_nonroot_local_partitions",
+    "rule": "mount_option_nodev_nonroot_local_partitions",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if ( ! ( { rpm --quiet -q kernel-core ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} && ([ -f /run/ostree-booted ] || [ -L /ostree ]) ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ); then MOUNT_OPTION=\"nodev\" # Create array of local non-root partitions readarray -t partitions_records < <(findmnt --mtab --raw --evaluate | grep \"^/\\w\" | grep -v \"^/proc\" | grep \"\\s/dev/\\w\") # Create array of polyinstantiated directories, in case one of them is found in mtab readarray -t polyinstantiated_dirs < \\ <(grep -oP \"^\\s*[^#\\s]+\\s+\\S+\" /etc/security/namespace.conf | grep -oP \"(?<=\\s)\\S+?(?=/?\\$)\") # Define excluded non-local file systems excluded_fstypes=( afs autofs ceph cif"
+  },
+  {
     "id": "sysctl_kernel_dmesg_restrict",
     "title": "Restrict Access to Kernel Message Buffer",
     "description": "To set the runtime status of the kernel.dmesg_restrict kernel parameter, run the following command: $ sudo sysctl -w kernel.dmesg_restrict=1 To make sure that the setting is persistent, add the following line to a file in the directory /etc/sysctl.d: kernel.dmesg_restrict = 1",
@@ -351,17 +442,43 @@
     "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then # Comment out any occurrences of kernel.dmesg_restrict from /etc/sysctl.d/*.conf files for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf; do # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf) if [[ \"$(readlink -f \"$f\")\" == \"/etc/sysctl.conf\" ]]; then continue; fi matching_list=$(grep -P '^(?!#).*[\\s]*kernel.dmesg_restrict.*$' $f | uniq ) if ! test -z \"$matching_list\"; then while IFS= read -r entry; do escaped_entry=$(sed -e 's|/|\\\\/|g' <<< \"$entry\") # comment out \"kernel.dmesg_restrict\" matches to preserve user data sed -i --follow-symlinks \"s/^${escaped_entry}$/# &/g\" $f done <<< \"$matching_list\" fi done # # Set sysctl config file which to"
   },
   {
-    "id": "grub2_page_poison_argument",
-    "title": "Enable page allocator poisoning",
-    "description": "To enable poisoning of free pages, add the argument page_poison=1 to the default GRUB 2 command line for the Linux operating system. To ensure that page_poison=1 is added as a kernel command line argument to newly installed kernels, add page_poison=1 to the default Grub2 command line for Linux operating systems. Modify the line within /etc/default/grub as shown below: GRUB_CMDLINE_LINUX=\"... page_poison=1 ...\" Run the following command to update command line for already installed kernels:# grubby --update-kernel=ALL --args=\"page_poison=1\" If the system is distributed as a bootable container image, GRUB2 can't be configured using the method described above, but the following method needs to be used instead. The kernel arguments should be set in /usr/lib/bootc/kargs.d in a TOML file that has the following form: # /usr/lib/bootc/kargs.d/10-example.toml kargs = [\"page_poison=1\"] For more details on configuring kernel arguments in bootable container images, please refer to Bootc documentation.",
+    "id": "sysctl_user_max_user_namespaces_no_remediation",
+    "title": "Disable the use of user namespaces",
+    "description": "To set the runtime status of the user.max_user_namespaces kernel parameter, run the following command: $ sudo sysctl -w user.max_user_namespaces=0 To make sure that the setting is persistent, add the following line to a file in the directory /etc/sysctl.d: user.max_user_namespaces = 0 When containers are deployed on the machine, the value should be set to large non-zero value.",
     "severity": "2",
     "result": "fail",
-    "oval_id": "xccdf_org.ssgproject.content_rule_grub2_page_poison_argument",
-    "rule": "grub2_page_poison_argument",
+    "oval_id": "xccdf_org.ssgproject.content_rule_sysctl_user_max_user_namespaces_no_remediation",
+    "rule": "sysctl_user_max_user_namespaces_no_remediation",
     "class": "compliance",
     "host": "localhost",
     "os": "localhost.localdomain",
-    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core && { rpm --quiet -q grub2-common; }; then if { rpm --quiet -q kernel rpm-ostree bootc && ! rpm --quiet -q openshift-kubelet && { [ -f \"/run/.containerenv\" ] || [ -f \"/.containerenv\" ]; }; } ; then KARGS_DIR=\"/usr/lib/bootc/kargs.d/\" if grep -q -E \"page_poison\" \"$KARGS_DIR/*.toml\" ; then sed -i -E \"s/^(\\s*kargs\\s*=\\s*\\[.*)\\\"page_poison=[^\\\"]*\\\"(.*]\\s*)/\\1\\\"page_poison=1\\\"\\2/\" \"$KARGS_DIR/*.toml\" else echo \"kargs = [\\\"page_poison=1\\\"]\" >> \"$KARGS_DIR/10-page_poison.toml\" fi else grubby --update-kernel=ALL --args=page_poison=1 fi else >&2 echo 'Remediation is not applicable, nothing was done' fi"
+    "recommendation": "Review and remediate: Disable the use of user namespaces"
+  },
+  {
+    "id": "sysctl_kernel_kptr_restrict",
+    "title": "Restrict Exposed Kernel Pointer Addresses Access",
+    "description": "To set the runtime status of the kernel.kptr_restrict kernel parameter, run the following command: $ sudo sysctl -w kernel.kptr_restrict= To make sure that the setting is persistent, add the following line to a file in the directory /etc/sysctl.d: kernel.kptr_restrict =",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_sysctl_kernel_kptr_restrict",
+    "rule": "sysctl_kernel_kptr_restrict",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then # Comment out any occurrences of kernel.kptr_restrict from /etc/sysctl.d/*.conf files for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf; do # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf) if [[ \"$(readlink -f \"$f\")\" == \"/etc/sysctl.conf\" ]]; then continue; fi matching_list=$(grep -P '^(?!#).*[\\s]*kernel.kptr_restrict.*$' $f | uniq ) if ! test -z \"$matching_list\"; then while IFS= read -r entry; do escaped_entry=$(sed -e 's|/|\\\\/|g' <<< \"$entry\") # comment out \"kernel.kptr_restrict\" matches to preserve user data sed -i --follow-symlinks \"s/^${escaped_entry}$/# &/g\" $f done <<< \"$matching_list\" fi done # # Set sysctl config file which to sa"
+  },
+  {
+    "id": "sysctl_kernel_randomize_va_space",
+    "title": "Enable Randomized Layout of Virtual Address Space",
+    "description": "To set the runtime status of the kernel.randomize_va_space kernel parameter, run the following command: $ sudo sysctl -w kernel.randomize_va_space=2 To make sure that the setting is persistent, add the following line to a file in the directory /etc/sysctl.d: kernel.randomize_va_space = 2",
+    "severity": "2",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_sysctl_kernel_randomize_va_space",
+    "rule": "sysctl_kernel_randomize_va_space",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then # Comment out any occurrences of kernel.randomize_va_space from /etc/sysctl.d/*.conf files for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf; do # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf) if [[ \"$(readlink -f \"$f\")\" == \"/etc/sysctl.conf\" ]]; then continue; fi matching_list=$(grep -P '^(?!#).*[\\s]*kernel.randomize_va_space.*$' $f | uniq ) if ! test -z \"$matching_list\"; then while IFS= read -r entry; do escaped_entry=$(sed -e 's|/|\\\\/|g' <<< \"$entry\") # comment out \"kernel.randomize_va_space\" matches to preserve user data sed -i --follow-symlinks \"s/^${escaped_entry}$/# &/g\" $f done <<< \"$matching_list\" fi done # # Set sysctl config f"
   },
   {
     "id": "selinux_state",
@@ -375,6 +492,19 @@
     "host": "localhost",
     "os": "localhost.localdomain",
     "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then var_selinux_state='' if [ -e \"/etc/selinux/config\" ] ; then LC_ALL=C sed -i \"/^SELINUX=/Id\" \"/etc/selinux/config\" else touch \"/etc/selinux/config\" fi # make sure file has newline at the end sed -i -e '$a\\' \"/etc/selinux/config\" cp \"/etc/selinux/config\" \"/etc/selinux/config.bak\" # Insert at the end of the file printf '%s\\n' \"SELINUX=$var_selinux_state\" >> \"/etc/selinux/config\" # Clean up after ourselves. rm \"/etc/selinux/config.bak\" fixfiles onboot else >&2 echo 'Remediation is not applicable, nothing was done' fi"
+  },
+  {
+    "id": "package_vsftpd_removed",
+    "title": "Uninstall vsftpd Package",
+    "description": "The vsftpd package can be removed with the following command: $ sudo dnf remove vsftpd",
+    "severity": "3",
+    "result": "fail",
+    "oval_id": "xccdf_org.ssgproject.content_rule_package_vsftpd_removed",
+    "rule": "package_vsftpd_removed",
+    "class": "compliance",
+    "host": "localhost",
+    "os": "localhost.localdomain",
+    "recommendation": "Remediation script: # CAUTION: This remediation script will remove vsftpd # from the system, and may remove any packages # that depend on vsftpd. Execute this # remediation AFTER testing on a non-production # system! if rpm -q --quiet \"vsftpd\" ; then dnf remove -y --noautoremove \"vsftpd\" fi"
   },
   {
     "id": "chronyd_client_only",
