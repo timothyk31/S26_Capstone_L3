@@ -313,6 +313,11 @@ class RemedyAgentV2:
 
         pre_approval_result: Optional[PreApprovalResult] = None
 
+        # Phase timing for step_durations
+        _session_start = time.time()
+        _review_total_seconds = 0.0
+        _last_review_end_time: Optional[float] = None
+
         tool_calls_used = 0
         max_tool_calls = self.remedy_agent.max_tool_iterations
         total_turns = 0
@@ -390,6 +395,8 @@ class RemedyAgentV2:
                     result_content = json.dumps(payload)
                     cmd_label = "review_plan"
                     cmd_duration = time.time() - _cmd_t0
+                    _review_total_seconds += cmd_duration
+                    _last_review_end_time = time.time()
 
                 elif name == "run_cmd":
                     command = (args.get("command") or "").strip()
@@ -449,6 +456,25 @@ class RemedyAgentV2:
             if tool_calls_used >= max_tool_calls:
                 break
 
+        # Compute step_durations from wall-clock phase boundaries
+        _session_end = time.time()
+        if _last_review_end_time is not None:
+            apply_fix_seconds = _session_end - _last_review_end_time
+            plan_fix_seconds = (
+                (_session_end - _session_start)
+                - _review_total_seconds
+                - apply_fix_seconds
+            )
+        else:
+            plan_fix_seconds = _session_end - _session_start
+            apply_fix_seconds = 0.0
+
+        step_durations = {
+            "plan_fix_seconds": round(plan_fix_seconds, 3),
+            "review_qa_seconds": round(_review_total_seconds, 3),
+            "apply_fix_seconds": round(apply_fix_seconds, 3),
+        }
+
         return {
             "transcript": transcript,
             "commands_executed": commands_executed,
@@ -467,5 +493,6 @@ class RemedyAgentV2:
                 ),
                 "llm_calls": len(usage_records),
                 "per_turn": turn_records,
+                "step_durations": step_durations,
             },
         }
