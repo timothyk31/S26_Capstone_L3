@@ -43,7 +43,7 @@ class RemedyAgentV2:
     validation without leaving the session.
     """
 
-    _MAX_REVIEW_REJECTIONS = 3
+    _MAX_REVIEW_REJECTIONS = 1
 
     def __init__(
         self,
