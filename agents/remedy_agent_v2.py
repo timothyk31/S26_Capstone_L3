@@ -43,6 +43,8 @@ class RemedyAgentV2:
     validation without leaving the session.
     """
 
+    _MAX_REVIEW_REJECTIONS = 3
+
     def __init__(
         self,
         remedy_agent: RemedyAgent,
@@ -286,7 +288,9 @@ class RemedyAgentV2:
             "  3. APPLY: Only after review_plan returns approved=true, use "
             "run_cmd / read_file / write_file to apply the fix.\n"
             "  4. If review_plan returns approved=false, read the feedback, "
-            "revise your approach, and call review_plan again.\n\n"
+            "revise your approach, and call review_plan again. You have a "
+            "maximum of 3 review attempts — if all are rejected, proceed "
+            "with your best plan using the execution tools.\n\n"
             "EXECUTION RULES:\n"
             "- One command at a time. Do NOT chain with && or ;\n"
             "- Always use read_file before modifying a config file.\n"
@@ -317,6 +321,10 @@ class RemedyAgentV2:
         _session_start = time.time()
         _review_total_seconds = 0.0
         _last_review_end_time: Optional[float] = None
+
+        # Review cap tracking
+        consecutive_review_rejections = 0
+        review_plan_capped = False
 
         tool_calls_used = 0
         max_tool_calls = self.remedy_agent.max_tool_iterations
@@ -392,6 +400,31 @@ class RemedyAgentV2:
                         attempt_number=attempt_number,
                     )
                     pre_approval_result = advisory
+
+                    if advisory.approved:
+                        consecutive_review_rejections = 0
+                    else:
+                        consecutive_review_rejections += 1
+                        if consecutive_review_rejections >= self._MAX_REVIEW_REJECTIONS:
+                            review_plan_capped = True
+                            console.print(
+                                f"[yellow]  [{vuln.id}] review_plan cap reached "
+                                f"({consecutive_review_rejections} consecutive "
+                                f"rejections) — forcing LLM to proceed[/yellow]"
+                            )
+                            payload["instruction"] = (
+                                f"MAX REVIEW RETRIES EXCEEDED "
+                                f"({consecutive_review_rejections} consecutive "
+                                f"rejections). Do NOT call review_plan again. "
+                                f"Proceed immediately with run_cmd / read_file / "
+                                f"write_file to apply your best remediation plan."
+                            )
+                            payload["review_plan_capped"] = True
+                            v2_tools = [
+                                t for t in v2_tools
+                                if t.get("function", {}).get("name") != "review_plan"
+                            ]
+
                     result_content = json.dumps(payload)
                     cmd_label = "review_plan"
                     cmd_duration = time.time() - _cmd_t0
@@ -494,5 +527,7 @@ class RemedyAgentV2:
                 "llm_calls": len(usage_records),
                 "per_turn": turn_records,
                 "step_durations": step_durations,
+                "review_rejections": consecutive_review_rejections,
+                "review_plan_capped": review_plan_capped,
             },
         }

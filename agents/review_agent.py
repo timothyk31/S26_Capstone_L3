@@ -58,7 +58,7 @@ def _build_review_prompt(input_data: ReviewInput) -> str:
     triage = input_data.triage_decision
 
     lines = [
-        "You are a security remediation reviewer. Evaluate the following fix for quality and optimality.",
+        "You are a security remediation reviewer. Evaluate the following proposed remediation plan for quality and correctness.",
         "",
         "## Vulnerability",
         f"- ID: {v.id}",
@@ -71,19 +71,12 @@ def _build_review_prompt(input_data: ReviewInput) -> str:
         f"- Risk level: {triage.risk_level}",
         f"- Reason: {triage.reason}",
         "",
-        "## Remediation attempt",
-        f"- Commands executed: {attempt.commands_executed}",
-        f"- Scan passed: {attempt.scan_passed}",
-        f"- Success: {attempt.success}",
+        "## Proposed Remediation Plan",
+        "(NOTE: This plan has NOT been executed yet. Evaluate whether it WOULD resolve the vulnerability if executed correctly.)",
+        "",
     ]
-    if attempt.error_summary:
-        lines.append(f"- Error summary: {attempt.error_summary}")
     if attempt.llm_verdict:
-        lines.append(f"- LLM verdict: {attempt.llm_verdict.message} (resolved={attempt.llm_verdict.resolved})")
-    if attempt.execution_details:
-        lines.append("- Execution details (last few):")
-        for d in attempt.execution_details[-3:]:
-            lines.append(f"  - {d.command} -> exit_code={d.exit_code}, success={d.success}")
+        lines.append(attempt.llm_verdict.message)
     # Previous review verdicts (if this is a retry)
     if input_data.previous_verdicts:
         lines.extend(["", "## Previous Review History"])
@@ -105,9 +98,10 @@ def _build_review_prompt(input_data: ReviewInput) -> str:
         "concerns (list of strings), suggested_improvements (list of strings),",
         "security_score (integer 1-10 or null), best_practices_followed (bool).",
         "",
-        "IMPORTANT: Set approve=true if the remediation functionally resolves the vulnerability,",
-        "even if the approach is not perfectly elegant or optimal. Only set approve=false if the fix",
-        "is actively harmful, introduces new security risks, or fails to address the vulnerability.",
+        "IMPORTANT: Set approve=true if the proposed plan would functionally resolve the vulnerability",
+        "when executed. Only set approve=false if the plan is actively harmful, introduces new security",
+        "risks, or would fail to address the vulnerability. Do NOT reject because commands have not been",
+        "run yet — this is a plan review before execution.",
         "Use is_optimal, concerns, and suggested_improvements to note areas for improvement",
         "without blocking the fix from proceeding.",
     ])
@@ -208,13 +202,14 @@ class ReviewAgent:
 
     SYSTEM_PROMPT = (
         "You are a pragmatic security remediation reviewer for Linux systems. "
-        "Given a vulnerability and the remediation that was applied, you evaluate whether the fix "
-        "effectively addresses the vulnerability without breaking the system.\n\n"
+        "You are reviewing a PROPOSED PLAN before execution. Evaluate whether the plan "
+        "would resolve the vulnerability if executed correctly. Do NOT reject because "
+        "commands have not been run yet — they will be executed after your approval.\n\n"
         "APPROVAL GUIDELINES:\n"
-        "- APPROVE if the remediation resolves the vulnerability, even if the approach is not perfectly optimal.\n"
-        "- APPROVE if the scan passed and the fix is functional, even if you would prefer a different method.\n"
-        "- REJECT only if the fix is actively harmful, introduces serious security risks, or clearly does not address the vulnerability.\n"
-        "- Imperfect but working fixes should be APPROVED with suggestions for improvement noted in feedback.\n\n"
+        "- APPROVE if the proposed plan would resolve the vulnerability, even if the approach is not perfectly optimal.\n"
+        "- APPROVE if the plan describes correct commands and configuration changes for the target vulnerability.\n"
+        "- REJECT only if the plan is actively harmful, introduces serious security risks, or clearly would not address the vulnerability.\n"
+        "- Imperfect but workable plans should be APPROVED with suggestions for improvement noted in feedback.\n\n"
         "You respond only with a JSON object with the requested keys; no markdown code fences or extra text."
     )
 

@@ -337,3 +337,113 @@ class TestRemedyAgentV2:
         review_call_args = mock_review_v2.process.call_args[0][0]
         assert review_call_args.vulnerability.id == "auditd_audispd_syslog_plugin_activated"
         assert "auditd" in review_call_args.remediation_attempt.llm_verdict.message
+
+    def test_review_plan_cap_forces_proceed(
+        self, agent, mock_remedy_agent, mock_review_v2, remedy_input
+    ):
+        """3 consecutive rejections → cap hit → LLM proceeds with execution."""
+        mock_review_v2.process.return_value = PreApprovalResult(
+            review_verdict=ReviewVerdict(
+                finding_id="auditd_audispd_syslog_plugin_activated",
+                is_optimal=False,
+                approve=False,
+                feedback="Plan not good enough.",
+            ),
+            approved=False,
+            rejection_reason="Plan not good enough.",
+        )
+
+        mock_remedy_agent._chat.side_effect = [
+            # 3 review_plan calls, all rejected
+            _make_chat_response(
+                tool_calls=[_make_tool_call("c1", "review_plan", {
+                    "plan_description": "Plan v1"
+                })],
+            ),
+            _make_chat_response(
+                tool_calls=[_make_tool_call("c2", "review_plan", {
+                    "plan_description": "Plan v2"
+                })],
+            ),
+            _make_chat_response(
+                tool_calls=[_make_tool_call("c3", "review_plan", {
+                    "plan_description": "Plan v3"
+                })],
+            ),
+            # After cap: LLM proceeds with execution
+            _make_chat_response(
+                tool_calls=[_make_tool_call("c4", "run_cmd", {
+                    "command": "systemctl enable auditd"
+                })],
+            ),
+        ] + _text_padding(5, "Done.")
+
+        attempt, approval = agent.process(remedy_input)
+
+        assert attempt.llm_metrics is not None
+        assert attempt.llm_metrics["review_plan_capped"] is True
+        assert attempt.llm_metrics["review_rejections"] == 3
+        assert "systemctl enable auditd" in attempt.commands_executed
+
+    def test_review_plan_cap_resets_on_approval(
+        self, agent, mock_remedy_agent, mock_review_v2, remedy_input
+    ):
+        """Approval resets the consecutive rejection counter."""
+        rejected = PreApprovalResult(
+            review_verdict=ReviewVerdict(
+                finding_id="auditd_audispd_syslog_plugin_activated",
+                is_optimal=False,
+                approve=False,
+                feedback="Needs work.",
+            ),
+            approved=False,
+            rejection_reason="Needs work.",
+        )
+        approved = PreApprovalResult(
+            review_verdict=ReviewVerdict(
+                finding_id="auditd_audispd_syslog_plugin_activated",
+                is_optimal=True,
+                approve=True,
+                security_score=9,
+            ),
+            approved=True,
+        )
+
+        # rejected → approved (resets) → rejected → rejected → no cap
+        mock_review_v2.process.side_effect = [
+            rejected, approved, rejected, rejected,
+        ]
+
+        mock_remedy_agent._chat.side_effect = [
+            _make_chat_response(
+                tool_calls=[_make_tool_call("c1", "review_plan", {
+                    "plan_description": "Plan v1"
+                })],
+            ),
+            _make_chat_response(
+                tool_calls=[_make_tool_call("c2", "review_plan", {
+                    "plan_description": "Plan v2 (better)"
+                })],
+            ),
+            _make_chat_response(
+                tool_calls=[_make_tool_call("c3", "review_plan", {
+                    "plan_description": "Plan v3"
+                })],
+            ),
+            _make_chat_response(
+                tool_calls=[_make_tool_call("c4", "review_plan", {
+                    "plan_description": "Plan v4"
+                })],
+            ),
+            _make_chat_response(
+                tool_calls=[_make_tool_call("c5", "run_cmd", {
+                    "command": "systemctl enable auditd"
+                })],
+            ),
+        ] + _text_padding(5, "Done.")
+
+        attempt, _ = agent.process(remedy_input)
+
+        assert attempt.llm_metrics is not None
+        assert attempt.llm_metrics["review_plan_capped"] is False
+        assert attempt.llm_metrics["review_rejections"] == 2
