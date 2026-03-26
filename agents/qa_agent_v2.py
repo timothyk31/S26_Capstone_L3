@@ -50,8 +50,8 @@ def _build_qa_prompt(input_data: QAInput) -> str:
 
     lines = [
         "You are a system safety expert for Linux (Rocky Linux / RHEL).",
-        "Evaluate whether the following remediation is likely to be safe for the system.",
-        "You are providing a PREVENTATIVE expert opinion — no commands are being run.",
+        "Evaluate whether the following proposed remediation plan would be safe for the system.",
+        "You are providing a PREVENTATIVE expert opinion — the plan has NOT been executed yet.",
         "",
         "## Vulnerability",
         f"- ID: {vuln.id}",
@@ -60,22 +60,13 @@ def _build_qa_prompt(input_data: QAInput) -> str:
         f"- Description: {vuln.description or '(none)'}",
         f"- Recommendation: {vuln.recommendation or '(none)'}",
         "",
-        "## Remediation Applied",
-        f"- Commands executed: {attempt.commands_executed}",
-        f"- Files modified: {attempt.files_modified}",
-        f"- Files read: {attempt.files_read}",
+        "## Proposed Remediation Plan",
+        "(NOTE: This plan has NOT been executed yet. Evaluate whether it WOULD be safe if executed.)",
+        "",
     ]
 
-    if attempt.error_summary:
-        lines.append(f"- Error summary: {attempt.error_summary}")
     if attempt.llm_verdict:
-        lines.append(f"- LLM verdict: {attempt.llm_verdict.message}")
-    if attempt.execution_details:
-        lines.append("- Execution details (last few):")
-        for d in attempt.execution_details[-5:]:
-            lines.append(f"  - {d.command} -> exit_code={d.exit_code}, success={d.success}")
-            if d.stderr and d.stderr.strip():
-                lines.append(f"    stderr: {d.stderr[:200]}")
+        lines.append(attempt.llm_verdict.message)
 
     lines.extend([
         "",
@@ -201,15 +192,18 @@ class QAAgentV2:
 
     SYSTEM_PROMPT = (
         "You are a pragmatic system safety expert for Linux security remediation. "
-        "Given a vulnerability and the remediation that was applied, you evaluate "
-        "whether the fix is likely safe for the system — without running any commands.\n\n"
+        "You are evaluating a PROPOSED PLAN before execution. Given a vulnerability "
+        "and the proposed remediation plan, evaluate whether the plan would be safe "
+        "for the system if executed.\n\n"
         "SAFETY GUIDELINES:\n"
-        "- Mark safe=true if the remediation approach is correct and unlikely to break "
-        "critical services or lock out access.\n"
-        "- Mark safe=false ONLY if the fix is likely to cause service outages, lockouts, "
+        "- Mark safe=true if the proposed plan is correct and unlikely to break "
+        "critical services or lock out access when executed.\n"
+        "- Mark safe=false ONLY if the plan would likely cause service outages, lockouts, "
         "data loss, or other serious issues.\n"
         "- Security configuration changes are EXPECTED and are NOT side effects.\n"
-        "- Be pragmatic: if the fix addresses the vulnerability correctly, approve it.\n\n"
+        "- Be pragmatic: if the plan addresses the vulnerability correctly, approve it.\n"
+        "- Do NOT mark unsafe because commands have not been run yet — they will be "
+        "executed after your approval.\n\n"
         "You respond only with a JSON object with the requested keys; no markdown code "
         "fences or extra text."
     )

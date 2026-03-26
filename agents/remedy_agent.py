@@ -549,11 +549,11 @@ class RemedyAgent:
             },
         }
 
-    def _chat(self, messages: List[Dict[str, Any]], _retries: int = 3) -> Dict[str, Any]:
+    def _chat(self, messages: List[Dict[str, Any]], _retries: int = 3, *, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
         payload = {
             "model": self.model_name,
             "messages": messages,
-            "tools": self._tools_spec(),
+            "tools": tools if tools is not None else self._tools_spec(),
             "tool_choice": "auto",
         }
         last_exc: Optional[Exception] = None

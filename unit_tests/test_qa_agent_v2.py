@@ -130,25 +130,11 @@ class TestBuildQAPrompt:
         assert "firewalld" in prompt
         assert "Ensure firewalld is enabled" in prompt
 
-    def test_contains_remediation_commands(self, qa_input):
-        prompt = _build_qa_prompt(qa_input)
-        assert "systemctl enable firewalld" in prompt
-
-    def test_contains_review_info(self, qa_input):
-        prompt = _build_qa_prompt(qa_input)
-        assert "Approved: True" in prompt
-        assert "Correct approach" in prompt
-
-    def test_contains_execution_details(self, qa_input):
-        prompt = _build_qa_prompt(qa_input)
-        assert "exit_code=0" in prompt
-
-    def test_includes_error_summary_when_present(self, vulnerability, review_verdict):
+    def test_contains_plan_description(self, vulnerability, review_verdict):
         attempt = RemediationAttempt(
             finding_id="openscap_040",
             attempt_number=1,
-            commands_executed=["systemctl enable firewalld"],
-            error_summary="Permission denied on config write",
+            llm_verdict=ToolVerdict(message="Enable firewalld via systemctl", resolved=False),
         )
         qa_input = QAInput(
             vulnerability=vulnerability,
@@ -156,7 +142,17 @@ class TestBuildQAPrompt:
             review_verdict=review_verdict,
         )
         prompt = _build_qa_prompt(qa_input)
-        assert "Permission denied" in prompt
+        assert "Enable firewalld via systemctl" in prompt
+
+    def test_contains_review_info(self, qa_input):
+        prompt = _build_qa_prompt(qa_input)
+        assert "Approved: True" in prompt
+        assert "Correct approach" in prompt
+
+    def test_is_pre_execution_framing(self, qa_input):
+        prompt = _build_qa_prompt(qa_input)
+        assert "NOT been executed yet" in prompt
+        assert "Proposed Remediation Plan" in prompt
 
     def test_includes_llm_verdict_when_present(self, vulnerability, review_verdict):
         attempt = RemediationAttempt(
@@ -179,7 +175,7 @@ class TestBuildQAPrompt:
 class TestQAAgentV2Process:
     @patch("agents.qa_agent_v2._call_llm")
     def test_process_returns_qa_result(self, mock_llm, qa_input):
-        mock_llm.return_value = json.dumps({
+        raw = json.dumps({
             "finding_id": "openscap_040",
             "safe": True,
             "verdict_reason": "Service enablement is safe.",
@@ -187,6 +183,7 @@ class TestQAAgentV2Process:
             "services_affected": ["firewalld"],
             "recommendation": "Approve",
         })
+        mock_llm.return_value = (raw, {"content": raw}, {"total_tokens": 100}, 0.5)
         agent = QAAgentV2(api_key="test", base_url="http://fake", model="test-model")
         result = agent.process(qa_input)
 
@@ -197,7 +194,7 @@ class TestQAAgentV2Process:
 
     @patch("agents.qa_agent_v2._call_llm")
     def test_process_unsafe_verdict(self, mock_llm, qa_input):
-        mock_llm.return_value = json.dumps({
+        raw = json.dumps({
             "finding_id": "openscap_040",
             "safe": False,
             "verdict_reason": "This could disable network access.",
@@ -205,6 +202,7 @@ class TestQAAgentV2Process:
             "services_affected": ["firewalld", "NetworkManager"],
             "recommendation": "Rollback",
         })
+        mock_llm.return_value = (raw, {"content": raw}, {"total_tokens": 100}, 0.5)
         agent = QAAgentV2(api_key="test", base_url="http://fake", model="test-model")
         result = agent.process(qa_input)
 
@@ -214,7 +212,8 @@ class TestQAAgentV2Process:
 
     @patch("agents.qa_agent_v2._call_llm")
     def test_process_llm_returns_garbage(self, mock_llm, qa_input):
-        mock_llm.return_value = "I don't understand the question."
+        raw = "I don't understand the question."
+        mock_llm.return_value = (raw, {"content": raw}, {"total_tokens": 50}, 0.3)
         agent = QAAgentV2(api_key="test", base_url="http://fake", model="test-model")
         result = agent.process(qa_input)
 
