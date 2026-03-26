@@ -4,6 +4,7 @@ Extracted from qa_agent_adaptive.py and made configurable for multi-agent system
 """
 
 import json
+import time
 from typing import Any, Callable, Dict, List, Optional
 
 import requests
@@ -95,10 +96,15 @@ class ToolCallingLLM:
         reasoning_turns = 0
 
         while command_calls < self.max_tool_iterations:
+            _t0 = time.time()
             response = self._chat(messages)
+            _turn_duration = time.time() - _t0
             usage = response.get("usage")
             if usage:
+                usage["_api_call_seconds"] = round(_turn_duration, 3)
                 usage_records.append(usage)
+            else:
+                usage_records.append({"_api_call_seconds": round(_turn_duration, 3)})
 
             message = response["choices"][0]["message"]
             assistant_entry: Dict[str, Any] = {
@@ -107,6 +113,16 @@ class ToolCallingLLM:
             }
             if message.get("tool_calls"):
                 assistant_entry["tool_calls"] = message["tool_calls"]
+            # Capture reasoning/thinking tokens if present
+            reasoning = (
+                message.get("reasoning_content")
+                or message.get("reasoning")
+                or message.get("thinking")
+            )
+            if reasoning:
+                assistant_entry["reasoning"] = reasoning
+            # Store the full raw message object for auditing
+            assistant_entry["_raw_message"] = dict(message)
             transcript.append(assistant_entry)
             messages.append(message)
 
@@ -171,6 +187,13 @@ class ToolCallingLLM:
 
         apply_success = any(result.get("success") for result in detailed_results)
 
+        # Build the final message from the last assistant turn
+        final_msg = None
+        for entry in reversed(transcript):
+            if entry.get("role") == "assistant":
+                final_msg = entry
+                break
+
         return {
             "commands": executed_commands,
             "detailed_results": detailed_results,
@@ -180,6 +203,7 @@ class ToolCallingLLM:
             "transcript": transcript,
             "usage": usage_records,
             "session_label": session_label,
+            "final_message_full": final_msg,
         }
 
     def _chat(self, messages: List[Dict[str, Any]], _retries: int = 3) -> Dict[str, Any]:

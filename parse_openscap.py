@@ -153,8 +153,14 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
         # Get rule definition info
         rule_info = rule_definitions.get(rule_id, {})
         
-        # Extract rule name from ID (last part after colon)
-        rule_name = rule_id.split(':')[-1] if ':' in rule_id else rule_id
+        # Extract short rule name from full XCCDF ID
+        # e.g. "xccdf_org.ssgproject.content_rule_sshd_set_idle_timeout" → "sshd_set_idle_timeout"
+        if "rule_" in rule_id:
+            rule_name = rule_id.split("rule_", 1)[-1]
+        elif ":" in rule_id:
+            rule_name = rule_id.split(":")[-1]
+        else:
+            rule_name = rule_id
         
         title = rule_info.get('title', rule_name)
         description = rule_info.get('description', title)
@@ -180,7 +186,7 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
                 recommendation = f"Remediation script: {def_fix[:800]}"
         
         vuln = {
-            "id": f"openscap_{counter:03d}",
+            "id": rule_name,
             "title": title,
             "description": description,
             "severity": severity,
@@ -192,7 +198,7 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
             "os": os_name,
             "recommendation": recommendation
         }
-        
+
         findings.append(vuln)
         counter += 1
     

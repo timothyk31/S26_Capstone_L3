@@ -9,6 +9,7 @@ Default model: nvidia/nemotron-3-nano-30b-a3b:free (use nvidia/nemotron-3-nano-3
 import json
 import os
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -43,7 +44,7 @@ def _get_config() -> Tuple[str, str, str]:
             "OPENROUTER_API_KEY is required. Add it to .env (get a key from https://openrouter.ai/keys)."
         )
     base_url = (os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
-    model = os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
+    model = os.getenv("OPENROUTER_MODEL") or os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
     return api_key, base_url, model
 
 
@@ -83,6 +84,20 @@ def _build_review_prompt(input_data: ReviewInput) -> str:
         lines.append("- Execution details (last few):")
         for d in attempt.execution_details[-3:]:
             lines.append(f"  - {d.command} -> exit_code={d.exit_code}, success={d.success}")
+    # Previous review verdicts (if this is a retry)
+    if input_data.previous_verdicts:
+        lines.extend(["", "## Previous Review History"])
+        for i, pv in enumerate(input_data.previous_verdicts, 1):
+            lines.append(f"- Review #{i}: approve={pv.approve}, score={pv.security_score}")
+            if pv.concerns:
+                lines.append(f"  Concerns raised: {'; '.join(pv.concerns[:5])}")
+            if pv.suggested_improvements:
+                lines.append(f"  Improvements requested: {'; '.join(pv.suggested_improvements[:5])}")
+            if pv.feedback:
+                lines.append(f"  Feedback: {pv.feedback[:200]}")
+        lines.append("")
+        lines.append("Check whether the current fix addresses the issues raised in previous reviews.")
+
     lines.extend([
         "",
         "Respond with a single JSON object (no markdown, no extra text) with these exact keys:",
@@ -119,6 +134,7 @@ def _call_llm(
     }
     payload = {
         "model": model,
+        "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -143,7 +159,8 @@ def _call_llm(
     choice = data.get("choices", [{}])[0]
     message = choice.get("message", {})
     content = message.get("content") or ""
-    return content.strip()
+    usage = data.get("usage")
+    return content.strip(), message, usage, _api_duration
 
 
 def _parse_verdict(raw: str, finding_id: str) -> ReviewVerdict:
@@ -225,14 +242,14 @@ class ReviewAgent:
             api_key, base_url, model = _get_config()
         self.api_key = api_key or _get_config()[0]
         self.base_url = (base_url or os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
-        self.model = model or os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
+        self.model = model or os.getenv("OPENROUTER_MODEL") or os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
         self.request_timeout = request_timeout
         self.metrics_tracker = metrics_tracker
 
-    def process(self, input_data: ReviewInput) -> ReviewVerdict:
+    def process(self, input_data: ReviewInput, *, attempt: int = 1) -> ReviewVerdict:
         """Run review on one finding: LLM analyzes input and returns a verdict."""
         user_prompt = _build_review_prompt(input_data)
-        raw = _call_llm(
+        raw, full_message, usage, api_duration = _call_llm(
             user_prompt,
             self.SYSTEM_PROMPT,
             model=self.model,
@@ -241,6 +258,35 @@ class ReviewAgent:
             timeout=self.request_timeout,
             metrics_tracker=self.metrics_tracker,
         )
+
+        # Save transcript if transcript_dir is set
+        if self._transcript_dir:
+            vid = input_data.vulnerability.id
+            # Capture reasoning/thinking tokens if present
+            reasoning = (
+                full_message.get("reasoning_content")
+                or full_message.get("reasoning")
+                or full_message.get("thinking")
+            )
+
+            transcript_data = {
+                "finding_id": vid,
+                "model": self.model,
+                "attempt": attempt,
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "assistant_message": {
+                    "content": raw,
+                    **(({"reasoning": reasoning}) if reasoning else {}),
+                },
+                "_raw_message": dict(full_message),
+                "usage": usage,
+                "timing": {
+                    "api_call_seconds": round(api_duration, 3),
+                },
+            }
+            tp = self._transcript_dir / f"review_transcript_{vid}_attempt{attempt}.json"
+            tp.write_text(json.dumps(transcript_data, indent=2, default=str), encoding="utf-8")
+
         return _parse_verdict(raw, input_data.vulnerability.id)
 
     # ------------------------------------------------------------------

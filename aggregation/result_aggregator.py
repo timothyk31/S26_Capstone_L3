@@ -236,7 +236,7 @@ class ResultAggregator:
                 rm = r.remediation
                 lines.append(
                     f"   Remedy: attempt #{rm.attempt_number}, scan_passed={rm.scan_passed}, "
-                    f"cmds={len(rm.commands_executed)}, duration={rm.duration:.1f}s"
+                    f"cmds={len(rm.commands_executed)}, duration={rm.attempt_duration:.1f}s"
                 )
                 for cmd in rm.commands_executed:
                     lines.append(f"     - {cmd}")

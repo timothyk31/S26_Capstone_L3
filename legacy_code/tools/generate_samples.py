@@ -305,7 +305,7 @@ for v, td in zip(vulns, triage_decisions):
         review=reviews.get(v.id),
         qa=qa_results.get(v.id),
         final_status="success" if v.id in qa_results else ("discarded" if not td.should_remediate else "failed"),
-        total_duration=remediations[v.id].duration if v.id in remediations else 0.0,
+        total_duration=remediations[v.id].attempt_duration if v.id in remediations else 0.0,
         timestamp="2026-02-17T14:30:00",
     )
     results.append(fr)

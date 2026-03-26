@@ -22,7 +22,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 import requests
 from dotenv import find_dotenv, load_dotenv
@@ -57,6 +57,10 @@ class _LLMVerdict(BaseModel):
     touches_authn_authz: bool = False
     touches_networking: bool = False
     touches_filesystems: bool = False
+    estimated_complexity: str = Field(
+        default="medium",
+        description="Estimated remediation complexity: low | medium | high",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -96,6 +100,12 @@ class _OpenRouterClient:
         self.temperature = temperature
         self.metrics_tracker = metrics_tracker
         self.endpoint = f"{self.base_url}/chat/completions"
+        self.system_prompt = system_prompt or (
+            "You are a security triage assistant for Rocky/RHEL 9 OpenSCAP STIG findings.\n"
+            "Return ONLY a single JSON object that matches the schema exactly.\n"
+            "No prose. No markdown. No code fences. No extra keys.\n"
+            "Be conservative: if uncertain, choose requires_human_review.\n"
+        )
         self.headers: Dict[str, str] = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -116,12 +126,7 @@ class _OpenRouterClient:
             "messages": [
                 {
                     "role": "system",
-                    "content": (
-                        "You are a security triage assistant for Rocky/RHEL 9 OpenSCAP STIG findings.\n"
-                        "Return ONLY a single JSON object that matches the schema exactly.\n"
-                        "No prose. No markdown. No code fences. No extra keys.\n"
-                        "Be conservative: if uncertain, choose requires_human_review.\n"
-                    ),
+                    "content": self.system_prompt,
                 },
                 {"role": "user", "content": prompt},
             ],
@@ -133,12 +138,14 @@ class _OpenRouterClient:
             if self.metrics_tracker is not None:
                 start_time = self.metrics_tracker.start_call()
             try:
+                _t0 = time.time()
                 r = requests.post(
                     self.endpoint,
                     headers=self.headers,
                     json=payload,
                     timeout=self.timeout,
                 )
+                _api_duration = time.time() - _t0
                 if r.status_code in (429, 500, 502, 503, 504):
                     last_err = f"Transient OpenRouter error {r.status_code}: {r.text}"
                     if self.metrics_tracker is not None:
@@ -161,7 +168,8 @@ class _OpenRouterClient:
                 ).strip()
                 if not content:
                     raise RuntimeError("OpenRouter returned empty content.")
-                return content
+                usage = data.get("usage")
+                return content, message, usage, _api_duration
 
             except requests.RequestException as e:
                 last_err = f"RequestException: {e}"
@@ -194,8 +202,8 @@ def _vuln_text_blob(v: Vulnerability) -> str:
     ).lower()
 
 
-def _build_prompt(v: Vulnerability) -> str:
-    return (
+def _build_prompt(v: Vulnerability, *, lenient: bool = False) -> str:
+    schema_block = (
         "Classify this OpenSCAP finding into exactly one category:\n"
         "safe_to_remediate, requires_human_review, too_dangerous_to_remediate.\n\n"
         "Return ONLY JSON for this schema:\n"
@@ -210,7 +218,8 @@ def _build_prompt(v: Vulnerability) -> str:
         '  "requires_reboot": boolean,\n'
         '  "touches_authn_authz": boolean,\n'
         '  "touches_networking": boolean,\n'
-        '  "touches_filesystems": boolean\n'
+        '  "touches_filesystems": boolean,\n'
+        '  "estimated_complexity": "low"|"medium"|"high"\n'
         "}\n\n"
         "Finding:\n"
         f"- finding_id: {v.id}\n"
@@ -219,19 +228,54 @@ def _build_prompt(v: Vulnerability) -> str:
         f"- title: {v.title}\n"
         f"- description: {(v.description or '')[:900]}\n"
         f"- recommendation: {(v.recommendation or '')[:900]}\n\n"
-        "Policy:\n"
-        "- Be conservative. If unclear, choose requires_human_review.\n"
-        "- Mark too_dangerous_to_remediate for partitioning/filesystem/bootloader/FIPS changes.\n"
-        "- Mark requires_human_review for auth/ssh/sudo/pam changes that could lock out access, "
-        "EXCEPT password-related rules.\n"
-        "- Mark safe_to_remediate for password policy/complexity/expiration/history rules "
-        "(pwquality, chage, password length, password age, password complexity, lockout, etc.).\n"
-        "- Mark safe_to_remediate for low-risk package installs, service enablement, "
-        "sysctl persistence that is unlikely to lock out access.\n"
     )
 
+    complexity_guidance = (
+        "Complexity estimation:\n"
+        "- low: simple config edit, package install, service enable/disable (~1-5 min)\n"
+        "- medium: multi-file changes, service restart, moderate validation (~5-15 min)\n"
+        "- high: filesystem-wide scans (find /), FIPS mode, kernel params, "
+        "extensive file permission sweeps, large-scale validation (~15+ min)\n\n"
+    )
 
-def _verdict_to_decision(v: _LLMVerdict) -> TriageDecision:
+    if lenient:
+        policy = (
+            "Policy:\n"
+            "- Prefer safe_to_remediate whenever the fix is unlikely to cause lockout or system breakage.\n"
+            "- Only use requires_human_review when there is a clear, specific risk of losing "
+            "SSH/console access or breaking a critical service.\n"
+            "- Mark too_dangerous_to_remediate ONLY for partitioning/filesystem/bootloader/FIPS changes.\n"
+            "- Mark safe_to_remediate for auth/ssh/sudo/pam changes that follow standard STIG "
+            "hardening patterns, including password policy, SSH ciphers, session timeouts, and similar.\n"
+            "- Mark safe_to_remediate for package installs, service enablement, "
+            "sysctl persistence, audit rules, and file permissions.\n\n"
+            + complexity_guidance
+        )
+    else:
+        policy = (
+            "Policy:\n"
+            "- Be conservative. If unclear, choose requires_human_review.\n"
+            "- Mark too_dangerous_to_remediate for partitioning/filesystem/bootloader/FIPS changes.\n"
+            "- Mark requires_human_review for auth/ssh/sudo/pam changes that could lock out access, "
+            "EXCEPT password-related rules.\n"
+            "- Mark safe_to_remediate for password policy/complexity/expiration/history rules "
+            "(pwquality, chage, password length, password age, password complexity, lockout, etc.).\n"
+            "- Mark safe_to_remediate for low-risk package installs, service enablement, "
+            "sysctl persistence that is unlikely to lock out access.\n\n"
+            + complexity_guidance
+        )
+
+    return schema_block + policy
+
+
+_COMPLEXITY_ORDER = {"low": 1, "medium": 2, "high": 3}
+
+
+def _verdict_to_decision(
+    v: _LLMVerdict,
+    *,
+    max_complexity: str = "high",
+) -> TriageDecision:
     """Map the richer internal _LLMVerdict to the pipeline TriageDecision."""
     category = v.category
 
@@ -247,6 +291,15 @@ def _verdict_to_decision(v: _LLMVerdict) -> TriageDecision:
         should_remediate = False
         requires_human_review = False
         risk_level = "critical"
+
+    # Complexity threshold guardrail
+    complexity = v.estimated_complexity
+    if (
+        should_remediate
+        and _COMPLEXITY_ORDER.get(complexity, 2) > _COMPLEXITY_ORDER[max_complexity]
+    ):
+        should_remediate = False
+        requires_human_review = True
 
     # Build estimated_impact from risk flags
     impact_parts: List[str] = []
@@ -268,6 +321,7 @@ def _verdict_to_decision(v: _LLMVerdict) -> TriageDecision:
         reason=v.rationale,
         requires_human_review=requires_human_review,
         estimated_impact="; ".join(impact_parts) if impact_parts else None,
+        estimated_complexity=complexity,
     )
 
 
@@ -303,6 +357,7 @@ def _heuristic_triage(v: Vulnerability) -> Optional[_LLMVerdict]:
             ],
             requires_reboot=True,
             touches_filesystems=True,
+            estimated_complexity="high",
         )
 
     # Auth / password / PAM / SSH → human review
@@ -357,6 +412,7 @@ class TriageAgent(BaseAgent):
         self,
         *,
         mode: str = "balanced",
+        lenient: bool = False,
         model_override: Optional[str] = None,
         fallback_models: Optional[List[str]] = None,
         api_key: Optional[str] = None,
@@ -364,6 +420,11 @@ class TriageAgent(BaseAgent):
         timeout: int = 60,
         metrics_tracker=None,
     ):
+        self._max_complexity = max_complexity
+        self._transcript_dir: Optional[Path] = Path(transcript_dir) if transcript_dir else None
+        if self._transcript_dir:
+            self._transcript_dir.mkdir(parents=True, exist_ok=True)
+
         api_key = api_key or os.getenv("OPENROUTER_API_KEY")
         if not api_key:
             raise RuntimeError(
@@ -371,8 +432,21 @@ class TriageAgent(BaseAgent):
                 "Provide it as an argument or set it in .env / environment."
             )
 
+        self._lenient = lenient
+
         spec = MODELS_BY_MODE.get(mode, MODELS_BY_MODE["balanced"])
-        chosen_model = model_override or os.getenv("OPENROUTER_MODEL") or spec.name
+        env_model = os.getenv("OPENROUTER_MODEL") or os.getenv("TRIAGE_MODEL")
+        chosen_model = model_override or env_model or spec.name
+
+        system_prompt = None
+        if lenient:
+            system_prompt = (
+                "You are a security triage assistant for Rocky/RHEL 9 OpenSCAP STIG findings.\n"
+                "Return ONLY a single JSON object that matches the schema exactly.\n"
+                "No prose. No markdown. No code fences. No extra keys.\n"
+                "Prefer safe_to_remediate when possible. Only use requires_human_review "
+                "for changes that have a genuine risk of locking out access or breaking the system.\n"
+            )
 
         self.metrics_tracker = metrics_tracker
         self._client = _OpenRouterClient(
@@ -405,12 +479,12 @@ class TriageAgent(BaseAgent):
         hv = _heuristic_triage(vuln)
         if hv is not None:
             self.log_info(f"  → heuristic: {hv.category}")
-            return _verdict_to_decision(hv)
+            return _verdict_to_decision(hv, max_complexity=self._max_complexity)
 
         # 2) LLM classification (with fallback chain)
         verdict = self._classify_with_llm(vuln)
         self.log_info(f"  → LLM: {verdict.category}")
-        return _verdict_to_decision(verdict)
+        return _verdict_to_decision(verdict, max_complexity=self._max_complexity)
 
     # ------------------------------------------------------------------
     # Convenience: triage a batch of Vulnerabilities
@@ -451,7 +525,7 @@ class TriageAgent(BaseAgent):
     # ------------------------------------------------------------------
     def _classify_with_llm(self, vuln: Vulnerability) -> _LLMVerdict:
         """Call OpenRouter (with fallback models) and parse the response."""
-        prompt = _build_prompt(vuln)
+        prompt = _build_prompt(vuln, lenient=self._lenient)
         candidates = [self._client.model] + [
             m for m in self._fallback_models if m != self._client.model
         ]
@@ -462,9 +536,37 @@ class TriageAgent(BaseAgent):
         for model_name in candidates:
             try:
                 self._client.model = model_name
-                raw = self._client.classify(prompt)
+                raw, full_message, usage, api_duration = self._client.classify(prompt)
                 js = _extract_json(raw)
-                return _LLMVerdict.model_validate_json(js)
+                verdict = _LLMVerdict.model_validate_json(js)
+
+                # Save transcript if transcript_dir is set
+                if self._transcript_dir:
+                    # Capture reasoning/thinking tokens if present
+                    reasoning = (
+                        full_message.get("reasoning_content")
+                        or full_message.get("reasoning")
+                        or full_message.get("thinking")
+                    )
+
+                    transcript_data = {
+                        "finding_id": vuln.id,
+                        "model": model_name,
+                        "timestamp": datetime.now().isoformat(timespec="seconds"),
+                        "assistant_message": {
+                            "content": raw,
+                            **(({"reasoning": reasoning}) if reasoning else {}),
+                        },
+                        "_raw_message": dict(full_message),
+                        "usage": usage,
+                        "timing": {
+                            "api_call_seconds": round(api_duration, 3),
+                        },
+                    }
+                    tp = self._transcript_dir / f"triage_transcript_{vuln.id}.json"
+                    tp.write_text(json.dumps(transcript_data, indent=2, default=str), encoding="utf-8")
+
+                return verdict
 
             except (ValidationError, json.JSONDecodeError) as exc:
                 last_err = f"Validation/JSON error with {model_name}: {exc}"
@@ -483,6 +585,7 @@ class TriageAgent(BaseAgent):
             rationale=f"LLM triage failed; defaulting to requires_human_review. Last error: {last_err}",
             risk_factors=["triage automation failure"],
             safe_next_steps=["Review manually; verify rule intent in STIG/SSG guidance."],
+            estimated_complexity="medium",
         )
 
     # ------------------------------------------------------------------

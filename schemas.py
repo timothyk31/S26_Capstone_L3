@@ -85,6 +85,10 @@ class TriageDecision(BaseModel):
         default=None,
         description="Expected impact of remediation (e.g., 'service restart', 'reboot required')",
     )
+    estimated_complexity: Optional[str] = Field(
+        default=None,
+        description="Estimated remediation complexity: low | medium | high",
+    )
 
 
 # Remedy (needed for ReviewInput)
@@ -94,6 +98,11 @@ class RemedyInput(BaseModel):
     attempt_number: int = 1
     previous_attempts: List['RemediationAttempt'] = []
     review_feedback: Optional[str] = None
+    plan_text: Optional[str] = None
+    previous_review_verdicts: List['ReviewVerdict'] = Field(
+        default_factory=list,
+        description="Structured review verdicts from prior attempts (concerns, suggestions, scores)",
+    )
     
 class RemediationAttempt(BaseModel):
     finding_id: str
@@ -104,10 +113,12 @@ class RemediationAttempt(BaseModel):
     execution_details: List[RunCommandResult] = Field(default_factory=list)
     scan_passed: bool = False
     scan_output: Optional[str] = None
-    duration: float = 0.0
+    attempt_duration: float = 0.0
+    scan_duration: Optional[float] = None
     success: bool = False
     error_summary: Optional[str] = None
     llm_verdict: Optional[ToolVerdict] = None
+    llm_metrics: Optional[Dict[str, Any]] = None
 
 
 # Review Agent
@@ -115,6 +126,10 @@ class ReviewInput(BaseModel):
     vulnerability: Vulnerability
     remediation_attempt: RemediationAttempt
     triage_decision: TriageDecision
+    previous_verdicts: List['ReviewVerdict'] = Field(
+        default_factory=list,
+        description="Review verdicts from prior attempts so reviewer can check if issues were addressed",
+    )
 
 
 class ReviewVerdict(BaseModel):

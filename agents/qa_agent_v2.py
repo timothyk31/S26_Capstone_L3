@@ -17,7 +17,9 @@ import json
 import os
 import re
 import time
-from typing import List, Optional, Tuple
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
@@ -36,7 +38,7 @@ def _get_config() -> Tuple[str, str, str]:
     if not api_key:
         raise ValueError("OPENROUTER_API_KEY is required.")
     base_url = (os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
-    model = os.getenv("QA_AGENT_V2_MODEL") or os.getenv("OPENROUTER_MODEL") or DEFAULT_QA_V2_MODEL
+    model = os.getenv("OPENROUTER_MODEL") or os.getenv("QA_AGENT_V2_MODEL") or DEFAULT_QA_V2_MODEL
     return api_key, base_url, model
 
 
@@ -128,6 +130,7 @@ def _call_llm(
     }
     payload = {
         "model": model,
+        "response_format": {"type": "json_object"},
         "messages": [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": user_prompt},
@@ -152,7 +155,8 @@ def _call_llm(
     choice = data.get("choices", [{}])[0]
     message = choice.get("message", {})
     content = message.get("content") or ""
-    return content.strip()
+    usage = data.get("usage")
+    return content.strip(), message, usage, _api_duration
 
 
 def _parse_qa_result(raw: str, finding_id: str) -> QAResult:
@@ -223,15 +227,15 @@ class QAAgentV2:
             api_key, base_url, model = _get_config()
         self.api_key = api_key or _get_config()[0]
         self.base_url = (base_url or os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
-        self.model = model or os.getenv("QA_AGENT_V2_MODEL") or os.getenv("OPENROUTER_MODEL") or DEFAULT_QA_V2_MODEL
+        self.model = model or os.getenv("OPENROUTER_MODEL") or os.getenv("QA_AGENT_V2_MODEL") or DEFAULT_QA_V2_MODEL
         self.request_timeout = request_timeout
         self.metrics_tracker = metrics_tracker
 
-    def process(self, input_data: QAInput) -> QAResult:
+    def process(self, input_data: QAInput, *, attempt: int = 1) -> QAResult:
         """Run QA validation: LLM expert opinion only, no commands."""
         start = time.time()
         user_prompt = _build_qa_prompt(input_data)
-        raw = _call_llm(
+        raw, full_message, usage, api_duration = _call_llm(
             user_prompt,
             self.SYSTEM_PROMPT,
             model=self.model,
@@ -240,6 +244,35 @@ class QAAgentV2:
             timeout=self.request_timeout,
             metrics_tracker=self.metrics_tracker,
         )
+
+        # Save transcript if transcript_dir is set
+        if self._transcript_dir:
+            vid = input_data.vulnerability.id
+            # Capture reasoning/thinking tokens if present
+            reasoning = (
+                full_message.get("reasoning_content")
+                or full_message.get("reasoning")
+                or full_message.get("thinking")
+            )
+
+            transcript_data = {
+                "finding_id": vid,
+                "model": self.model,
+                "attempt": attempt,
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "assistant_message": {
+                    "content": raw,
+                    **(({"reasoning": reasoning}) if reasoning else {}),
+                },
+                "_raw_message": dict(full_message),
+                "usage": usage,
+                "timing": {
+                    "api_call_seconds": round(api_duration, 3),
+                },
+            }
+            tp = self._transcript_dir / f"qa_transcript_{vid}_attempt{attempt}.json"
+            tp.write_text(json.dumps(transcript_data, indent=2, default=str), encoding="utf-8")
+
         result = _parse_qa_result(raw, input_data.vulnerability.id)
         result.validation_duration = time.time() - start
         return result

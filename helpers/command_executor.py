@@ -46,9 +46,11 @@ class ShellCommandExecutor:
         import re
         # Strip common SSH warnings
         text = re.sub(r"Warning: Permanently added .+ to the list of known hosts\.\n?", "", text)
+        # Strip /etc/issue banner (login shell prints it to stderr)
+        text = re.sub(r"\\S\nKernel \\r on an \\m \(\\l\)\n?", "", text)
         # Strip USG / DoD login banners (multi-line block starting with "You are accessing")
         text = re.sub(
-            r"You are accessing a U\.S\. Government.*?See User\s*\nAgreement for details\.\n?",
+            r"You are accessing a U\.S\. Government.*?(?=\n\n|\Z)",
             "",
             text,
             flags=re.DOTALL,
@@ -62,6 +64,10 @@ class ShellCommandExecutor:
             "StrictHostKeyChecking=no",
             "-o",
             "UserKnownHostsFile=/dev/null",
+            "-o",
+            "ServerAliveInterval=30",
+            "-o",
+            "ServerAliveCountMax=5",
             "-p",
             str(self.port),
         ]

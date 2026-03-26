@@ -1,27 +1,29 @@
 #!/usr/bin/env python3
 """
-main_multiagent.py — Full multi-agent remediation pipeline (V2).
+main_multiagent.py — Full multi-agent remediation pipeline (V2, batch-then-verify).
 
 Scans a target VM with OpenSCAP, then runs every finding through:
-  Triage → Remedy (fix → Review+QA approval → scan)
+  Triage → Remedy (plan → Review+QA → apply fix)
 
-V2 flow: Remedy generates fix, Review+QA approve BEFORE the verification
-scan runs.  If both approve AND the scan passes, the finding succeeds.
+After each round of fixes, ONE full-profile scan verifies all findings.
+Failures are retried up to --max-remedy-attempts rounds.
+
+All findings are processed sequentially (no parallelism) to avoid race
+conditions from concurrent SSH sessions modifying the same system.
 
 Produces:
   - Aggregated JSON results
   - Text report
-  - Consolidated Ansible playbook (successful fixes only)
 
 Usage examples:
 
   # Full pipeline from inventory file (scan + remediate)
   python main_multiagent.py --inventory inventory.yml
 
-  # Explicit host, 4 concurrent workers, smart LLM
+  # Explicit host, smart LLM
   python main_multiagent.py --host 10.244.72.95 --user root \\
          --key ~/.ssh/id_rsa --sudo-password SECRET \\
-         --workers 4 --triage-mode smart
+         --triage-mode smart
 
   # Skip scan, use existing parsed JSON
   python main_multiagent.py --skip-scan --parsed-json oscap_stig_rl9_parsed.json \\
@@ -30,9 +32,6 @@ Usage examples:
   # Limit to first 5 findings, severity >= 3
   python main_multiagent.py --inventory inventory.yml \\
          --max-vulns 5 --min-severity 3
-
-  # Sequential mode (1 worker, easier to debug)
-  python main_multiagent.py --inventory inventory.yml --workers 1
 """
 
 from __future__ import annotations
@@ -42,7 +41,6 @@ import json
 import os
 import sys
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -68,10 +66,13 @@ from agents.remedy_agent_v2 import RemedyAgentV2
 from agents.review_agent import ReviewAgent
 from agents.review_agent_v2 import ReviewAgentV2
 from agents.triage_agent import TriageAgent
+from helpers.agent_report_writer import _safe_dirname
 from helpers.command_executor import ShellCommandExecutor
 from helpers.scanner import Scanner
 from openscap_cli import OpenSCAPScanner
 from parse_openscap import parse_openscap
+from braintrust_eval_writer import write_braintrust_eval
+from context_pdf_writer import write_all_context_pdfs, _is_ssh_login_finding
 from schemas import TriageDecision, V2FindingResult, Vulnerability
 from workflow.pipeline_v2 import PipelineV2
 
@@ -192,10 +193,15 @@ def load_vulnerabilities(
 
 # ── Summary table ──────────────────────────────────────────────────────────
 
-def print_summary(results: List[V2FindingResult], elapsed: float) -> None:
+def print_summary(
+    results: List[V2FindingResult],
+    elapsed: float,
+    fixed_at_round: Optional[Dict[int, List[str]]] = None,
+    max_rounds: int = 3,
+) -> None:
     """Print a Rich summary table of pipeline results."""
     success = [r for r in results if r.final_status == "success"]
-    failed = [r for r in results if r.final_status == "failed"]
+    failed = [r for r in results if r.final_status in ("failed", "pending_scan")]
     discarded = [r for r in results if r.final_status == "discarded"]
     review = [r for r in results if r.final_status == "requires_human_review"]
 
@@ -214,6 +220,17 @@ def print_summary(results: List[V2FindingResult], elapsed: float) -> None:
     table.add_row("Requires Human Review", str(len(review)),
                   f"{len(review)/total*100:.0f}%", style="yellow")
     table.add_row("Total", str(len(results)), "100%", style="bold")
+
+    # Per-round breakdown
+    if fixed_at_round:
+        table.add_section()
+        for rnd in range(1, max_rounds + 1):
+            count = len(fixed_at_round.get(rnd, []))
+            if count or rnd <= max(fixed_at_round.keys(), default=0):
+                table.add_row(
+                    f"Fixed at round {rnd}", str(count),
+                    f"{count/total*100:.0f}%", style="green" if count else "dim",
+                )
 
     console.print()
     console.print(table)
@@ -270,11 +287,16 @@ def parse_args() -> argparse.Namespace:
                          default="balanced", help="Triage LLM quality tier")
     agent_g.add_argument("--review-model", default=None,
                          help="Override the Review agent LLM model (default: env REVIEW_AGENT_MODEL)")
+    agent_g.add_argument("--lenient-triage", action="store_true", default=False,
+                         help="Use lenient triage: prefer safe_to_remediate over "
+                              "requires_human_review when uncertain (useful for benchmarking)")
+    agent_g.add_argument("--max-complexity", choices=["low", "medium", "high"],
+                         default="medium",
+                         help="Max remediation complexity to attempt automatically. "
+                              "Findings above this threshold are sent to human review. "
+                              "(default: high — no extra filtering)")
 
-    # ── Concurrency ───
-    conc = p.add_argument_group("Concurrency")
-    conc.add_argument("--workers", type=int, default=1,
-                      help="Number of concurrent pipeline workers (default: 1)")
+    # (Concurrency removed — sequential execution to avoid race conditions)
 
     # ── Output ───
     out = p.add_argument_group("Output")
@@ -296,6 +318,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     t0 = time.time()
+    run_id = datetime.now().strftime("run_%Y%m%d_%H%M%S")
 
     console.print(Panel.fit(
         "[bold cyan]Multi-Agent Remediation Pipeline V2[/bold cyan]\n"
@@ -324,6 +347,7 @@ def main() -> int:
 
     # ── Scan ──────────────────────────────────────────────────────────
     if not args.skip_scan:
+        initial_scan_t0 = time.time()
         if not run_scan(
             host=host, user=user, key=key, port=port,
             sudo_password=sudo_password,
@@ -332,6 +356,7 @@ def main() -> int:
             remote_report=args.remote_report, local_report=args.local_report,
         ):
             return 1
+        console.print(f"[cyan]Initial scan completed in {time.time() - initial_scan_t0:.1f}s[/cyan]")
 
     # ── Parse findings ────────────────────────────────────────────────
     parsed_json = args.parsed_json
@@ -368,14 +393,48 @@ def main() -> int:
         return 0
 
     # ── Filter ────────────────────────────────────────────────────────
+    # Rule-name based skip set (stable across scans, unlike positional IDs)
+    SKIP_RULE_IDS = {
+        "accounts_passwords_pam_faillock_audit",
+        # SSH-related findings — remediation can break the active SSH session
+        "sshd_use_approved_macs_ordered_stig",     # Configure SSH Server to Use FIPS 140-2 Validated MACs
+        "sshd_approved_macs",                       # Configure SSH Client to Use FIPS 140-2 Validated MACs
+        "file_permissions_sshd_config",             # Verify Permissions on SSH Server Config File
+        "sshd_set_keepalive",                       # Set SSH Client Alive Count Max
+        "sshd_set_idle_timeout",                    # Set SSH Client Alive Interval
+        "sshd_disable_empty_passwords",             # Disable SSH Access via Empty Passwords
+        "sshd_disable_root_login",                  # Disable SSH Root Login
+        "sshd_disable_x11_forwarding",              # Disable X11 Forwarding
+        "sshd_enable_warning_banner",               # Enable SSH Warning Banner
+    }
     filtered: List[Vulnerability] = []
+    ssh_skipped = 0
+    manual_skipped = 0
     for v in vulns:
+        # Skip SSH root login findings (would lock us out of the VM)
+        if _is_ssh_login_finding(v.title, v.rule, v.oval_id):
+            ssh_skipped += 1
+            continue
+        if v.id in SKIP_RULE_IDS:
+            manual_skipped += 1
+            continue
         try:
             sev = int(v.severity)
         except (ValueError, TypeError):
             sev = 0
         if sev >= args.min_severity:
             filtered.append(v)
+
+    if ssh_skipped:
+        console.print(
+            f"[yellow]Skipped {ssh_skipped} SSH root-login finding(s) "
+            f"(would lock out remote access).[/yellow]"
+        )
+    if manual_skipped:
+        console.print(
+            f"[yellow]Skipped {manual_skipped} manually excluded finding(s): "
+            f"{', '.join(sorted(SKIP_RULE_IDS))}[/yellow]"
+        )
 
     if not filtered:
         console.print("[yellow]No findings meet the minimum severity threshold.[/yellow]")
@@ -418,7 +477,14 @@ def main() -> int:
     )
 
     # ── Initialize agents (V2) ───────────────────────────────────────
-    triage_agent = TriageAgent(mode=args.triage_mode)
+    transcript_dir = work_dir / "transcripts"
+    transcript_dir.mkdir(parents=True, exist_ok=True)
+
+    triage_agent = TriageAgent(
+        mode=args.triage_mode, lenient=args.lenient_triage,
+        transcript_dir=transcript_dir / "triage",
+        max_complexity=args.max_complexity,
+    )
 
     remedy_agent = RemedyAgent(
         executor=executor,
@@ -428,9 +494,12 @@ def main() -> int:
 
     review_agent = ReviewAgent(
         model=args.review_model,
+        transcript_dir=transcript_dir / "review",
     )
 
-    qa_agent_v2 = QAAgentV2()
+    qa_agent_v2 = QAAgentV2(
+        transcript_dir=transcript_dir / "qa",
+    )
 
     # V2 wrappers: Review wraps QA, Remedy wraps Review
     review_agent_v2 = ReviewAgentV2(
@@ -443,97 +512,222 @@ def main() -> int:
         review_agent_v2=review_agent_v2,
     )
 
-    # ── Pipeline factory ──────────────────────────────────────────────
+    # ── Pipeline ─────────────────────────────────────────────────────
     agent_report_dir = Path(args.work_dir) / "agent_reports"
 
-    def make_pipeline() -> PipelineV2:
-        return PipelineV2(
-            triage_agent=triage_agent,
-            remedy_agent_v2=remedy_agent_v2,
-            max_remedy_attempts=args.max_remedy_attempts,
-            report_dir=agent_report_dir,
-        )
+    pipeline = PipelineV2(
+        triage_agent=triage_agent,
+        remedy_agent_v2=remedy_agent_v2,
+        report_dir=agent_report_dir,
+        run_id=run_id,
+    )
 
-    # ── Run ───────────────────────────────────────────────────────────
+    # ── Batch-then-verify loop ────────────────────────────────────
     results: List[V2FindingResult] = []
     total = len(filtered)
+    max_rounds = args.max_remedy_attempts
+
     console.print(
         f"\n[bold cyan]── Running V2 pipeline for {total} finding(s) "
-        f"({args.workers} concurrent) ──[/bold cyan]\n"
+        f"(sequential, up to {max_rounds} rounds) ──[/bold cyan]\n"
     )
 
-    def _safe_run(pipeline: PipelineV2, vuln: Vulnerability) -> V2FindingResult:
+    # State tracker per finding
+    state: Dict[str, dict] = {}
+    fixed_at_round: Dict[int, List[str]] = {}  # round_num → [vid, ...]
+
+    def _make_progress() -> Progress:
+        return Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            MofNCompleteColumn(),
+            TimeElapsedColumn(),
+            console=console,
+        )
+
+    # ── Round 1: Triage + first attempt (sequential, no scan) ─────
+    console.print("[bold cyan]\n── Round 1: Triage + Remedy ──[/bold cyan]")
+    with _make_progress() as progress:
+        task = progress.add_task("Round 1: Triage + Remedy", total=total)
+        for vuln in filtered:
+            try:
+                result = pipeline.run(vuln)
+            except Exception as exc:
+                console.print(f"[red]Pipeline error for {vuln.id}: {exc}[/red]")
+                result = V2FindingResult(
+                    vulnerability=vuln,
+                    triage=TriageDecision(
+                        finding_id=vuln.id,
+                        should_remediate=False,
+                        risk_level="medium",
+                        reason=f"Pipeline error: {exc}",
+                        requires_human_review=True,
+                    ),
+                    final_status="failed",
+                    total_duration=0.0,
+                    timestamp=datetime.now().isoformat(timespec="seconds"),
+                )
+            results.append(result)
+
+            # Track state for findings that were actually remediated
+            if result.remediation is not None and result.final_status == "pending_scan":
+                state[vuln.id] = {
+                    "vulnerability": vuln,
+                    "triage": result.triage,
+                    "attempts": [result.remediation],
+                    "review_verdicts": (
+                        [result.pre_approval.review_verdict]
+                        if result.pre_approval else []
+                    ),
+                    "review_feedback": (
+                        result.pre_approval.rejection_reason
+                        if result.pre_approval and not result.pre_approval.approved
+                        else None
+                    ),
+                    "approval": result.pre_approval,
+                    "passed": False,
+                    "result_index": len(results) - 1,
+                }
+
+            progress.advance(task)
+
+    # ── Full scan after round 1 ──────────────────────────────────
+    if state:
+        console.print(
+            f"\n[bold cyan]── Full-profile scan "
+            f"({len(state)} findings remediated) ──[/bold cyan]"
+        )
         try:
-            return pipeline.run(vuln)
+            scan_t0 = time.time()
+            scan_findings = scanner.scan_full_profile()
+            scan_duration = round(time.time() - scan_t0, 3)
+            console.print(f"  Scan completed in {scan_duration:.1f}s")
+            for vid, s in state.items():
+                passed = Scanner.match_finding(s["vulnerability"], scan_findings)
+                if passed and not s["passed"]:
+                    fixed_at_round.setdefault(1, []).append(vid)
+                s["passed"] = passed
+                s["attempts"][-1].scan_passed = passed
+                s["attempts"][-1].success = passed
+                s["attempts"][-1].scan_duration = scan_duration
+                # Update the result
+                idx = s["result_index"]
+                results[idx] = results[idx].model_copy(
+                    update={
+                        "final_status": "success" if passed else "failed",
+                        "remediation": s["attempts"][-1],
+                    }
+                )
+                status = "PASS" if passed else "FAIL"
+                rule = s["vulnerability"].rule or vid
+                console.print(f"  [{vid}] ({rule}) scan → {status}")
+            # Re-write attempt JSONs with scan results
+            for vid, s in state.items():
+                attempt = s["attempts"][-1]
+                out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vid)
+                out_path = out_dir / f"attempt_{attempt.attempt_number}_output.json"
+                if out_dir.exists():
+                    out_path.write_text(
+                        json.dumps(attempt.model_dump(mode="json"), indent=2, default=str),
+                        encoding="utf-8",
+                    )
         except Exception as exc:
-            console.print(f"[red]Pipeline error for {vuln.id}: {exc}[/red]")
-            return V2FindingResult(
-                vulnerability=vuln,
-                triage=TriageDecision(
-                    finding_id=vuln.id,
-                    should_remediate=False,
-                    risk_level="medium",
-                    reason=f"Pipeline error: {exc}",
-                    requires_human_review=True,
-                ),
-                final_status="failed",
-                total_duration=0.0,
-                timestamp=datetime.now().isoformat(timespec="seconds"),
+            console.print(f"[red]Full-profile scan failed: {exc}[/red]")
+            for vid, s in state.items():
+                idx = s["result_index"]
+                results[idx] = results[idx].model_copy(
+                    update={"final_status": "failed"}
+                )
+
+    # ── Rounds 2..max: retry failures sequentially ───────────────
+    for round_num in range(2, max_rounds + 1):
+        pending = {vid: s for vid, s in state.items() if not s["passed"]}
+        if not pending:
+            console.print("[green]All findings passed — no retries needed.[/green]")
+            break
+
+        console.print(
+            f"\n[bold cyan]── Round {round_num}: Retrying {len(pending)} "
+            f"failed finding(s) ──[/bold cyan]"
+        )
+
+        with _make_progress() as progress:
+            task = progress.add_task(
+                f"Round {round_num}: Retrying failures", total=len(pending),
             )
-
-    progress = Progress(
-        SpinnerColumn(),
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        MofNCompleteColumn(),
-        TimeElapsedColumn(),
-        console=console,
-    )
-
-    if args.workers <= 1:
-        # Sequential
-        pipeline = make_pipeline()
-        with progress:
-            task = progress.add_task("Processing findings...", total=total)
-            for vuln in filtered:
-                result = _safe_run(pipeline, vuln)
-                results.append(result)
-                progress.advance(task)
-    else:
-        # Concurrent
-        order = {v.id: i for i, v in enumerate(filtered)}
-        with progress:
-            task = progress.add_task("Processing findings...", total=total)
-            with ThreadPoolExecutor(max_workers=args.workers) as pool:
-                future_map = {}
-                for vuln in filtered:
-                    p = make_pipeline()
-                    fut = pool.submit(_safe_run, p, vuln)
-                    future_map[fut] = vuln
-
-                for fut in as_completed(future_map):
-                    try:
-                        result = fut.result()
-                    except Exception as exc:
-                        vuln = future_map[fut]
-                        console.print(f"[red]Pipeline crashed for {vuln.id}: {exc}[/red]")
-                        result = V2FindingResult(
-                            vulnerability=vuln,
-                            triage=TriageDecision(
-                                finding_id=vuln.id,
-                                should_remediate=False,
-                                risk_level="medium",
-                                reason=f"Pipeline crash: {exc}",
-                                requires_human_review=True,
-                            ),
-                            final_status="failed",
-                            total_duration=0.0,
-                            timestamp=datetime.now().isoformat(timespec="seconds"),
-                        )
-                    results.append(result)
+            for vid, s in pending.items():
+                try:
+                    result = pipeline.run(
+                        s["vulnerability"],
+                        triage_decision=s["triage"],
+                        attempt_number=round_num,
+                        previous_attempts=s["attempts"],
+                        review_feedback=s["review_feedback"],
+                        previous_review_verdicts=s["review_verdicts"],
+                    )
+                except Exception as exc:
+                    console.print(f"[red]Retry error for {vid}: {exc}[/red]")
                     progress.advance(task)
+                    continue
 
-        results.sort(key=lambda r: order.get(r.vulnerability.id, 999))
+                if result.remediation is not None:
+                    s["attempts"].append(result.remediation)
+                if result.pre_approval:
+                    s["review_verdicts"].append(result.pre_approval.review_verdict)
+                    if not result.pre_approval.approved:
+                        s["review_feedback"] = result.pre_approval.rejection_reason
+                    else:
+                        s["review_feedback"] = None
+                s["approval"] = result.pre_approval
+
+                # Update stored result
+                idx = s["result_index"]
+                results[idx] = result
+
+                progress.advance(task)
+
+        # Full scan after this round
+        console.print(
+            f"\n[bold cyan]── Full-profile scan (round {round_num}) ──[/bold cyan]"
+        )
+        try:
+            scan_t0 = time.time()
+            scan_findings = scanner.scan_full_profile()
+            scan_duration = round(time.time() - scan_t0, 3)
+            console.print(f"  Scan completed in {scan_duration:.1f}s")
+            for vid, s in pending.items():
+                passed = Scanner.match_finding(s["vulnerability"], scan_findings)
+                if passed and not s["passed"]:
+                    fixed_at_round.setdefault(round_num, []).append(vid)
+                s["passed"] = passed
+                if s["attempts"]:
+                    s["attempts"][-1].scan_passed = passed
+                    s["attempts"][-1].success = passed
+                    s["attempts"][-1].scan_duration = scan_duration
+                idx = s["result_index"]
+                results[idx] = results[idx].model_copy(
+                    update={
+                        "final_status": "success" if passed else "failed",
+                        "remediation": s["attempts"][-1] if s["attempts"] else None,
+                    }
+                )
+                status = "PASS" if passed else "FAIL"
+                rule = s["vulnerability"].rule or vid
+                console.print(f"  [{vid}] ({rule}) scan → {status}")
+            # Re-write attempt JSONs with scan results
+            for vid, s in pending.items():
+                if s["attempts"]:
+                    attempt = s["attempts"][-1]
+                    out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vid)
+                    out_path = out_dir / f"attempt_{attempt.attempt_number}_output.json"
+                    if out_dir.exists():
+                        out_path.write_text(
+                            json.dumps(attempt.model_dump(mode="json"), indent=2, default=str),
+                            encoding="utf-8",
+                        )
+        except Exception as exc:
+            console.print(f"[red]Full-profile scan failed: {exc}[/red]")
 
     # ── Save results JSON ─────────────────────────────────────────────
     report_dir = Path(args.report_dir)
@@ -561,7 +755,7 @@ def main() -> int:
     text_lines.append("")
 
     remediated_count = sum(1 for r in results if r.final_status == "success")
-    failed_count = sum(1 for r in results if r.final_status == "failed")
+    failed_count = sum(1 for r in results if r.final_status in ("failed", "pending_scan"))
     discarded_count = sum(1 for r in results if r.final_status == "discarded")
     human_count = sum(1 for r in results if r.final_status == "requires_human_review")
     rate = (remediated_count / len(results) * 100) if results else 0.0
@@ -572,6 +766,12 @@ def main() -> int:
     text_lines.append(f"Discarded:             {discarded_count}")
     text_lines.append(f"Requires human review: {human_count}")
     text_lines.append(f"Success rate:          {rate:.1f}%")
+    if fixed_at_round:
+        text_lines.append("")
+        for rnd in range(1, max_rounds + 1):
+            count = len(fixed_at_round.get(rnd, []))
+            if count or rnd <= max(fixed_at_round.keys(), default=0):
+                text_lines.append(f"Fixed at round {rnd}:    {count}")
     text_lines.append("")
     text_lines.append("=" * 80)
 
@@ -590,7 +790,7 @@ def main() -> int:
             rm = r.remediation
             text_lines.append(
                 f"   Remedy: attempt #{rm.attempt_number}, scan_passed={rm.scan_passed}, "
-                f"cmds={len(rm.commands_executed)}, duration={rm.duration:.1f}s"
+                f"cmds={len(rm.commands_executed)}, duration={rm.attempt_duration:.1f}s"
             )
             for cmd in rm.commands_executed:
                 text_lines.append(f"     - {cmd}")
@@ -658,7 +858,7 @@ def main() -> int:
 
     # ── Summary ───────────────────────────────────────────────────────
     elapsed = time.time() - t0
-    print_summary(results, elapsed)
+    print_summary(results, elapsed, fixed_at_round=fixed_at_round, max_rounds=max_rounds)
 
     # ── Braintrust experiment ─────────────────────────────────────────
     try:

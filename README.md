@@ -157,6 +157,7 @@ Key flags:
 - **`--max-vulns` / `--min-severity`**: Control which and how many findings are processed.
 - **`--workers`**: Number of concurrent workers for parallel processing (default: 2).
 - **`--triage-mode`**: Triage mode - "auto" (skip low-risk) or "smart" (LLM-based decision).
+- **`--lenient-triage`**: Use lenient triage — prefer `safe_to_remediate` over `requires_human_review` when uncertain. Useful for benchmarking runs where you want more vulnerabilities to enter the remediation pipeline.
 - **`--skip-scan`**: Skip initial scan and use existing parsed results.
 
 ## Outputs
