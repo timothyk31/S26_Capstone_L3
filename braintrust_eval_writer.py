@@ -63,7 +63,7 @@ def _extract_remedy(r) -> Dict[str, Any]:
         "scan_passed": rm.scan_passed,
         "success": rm.success,
         "error_summary": rm.error_summary,
-        "duration": rm.attempt_duration,
+        "duration": rm.duration,
     }
 
 
@@ -78,7 +78,7 @@ def _extract_all_attempts(r) -> List[Dict[str, Any]]:
             "scan_passed": rm.scan_passed,
             "success": rm.success,
             "error_summary": rm.error_summary,
-            "duration": rm.attempt_duration,
+            "duration": rm.duration,
         })
     return out
 

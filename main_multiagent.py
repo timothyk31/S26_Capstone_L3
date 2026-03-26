@@ -306,12 +306,9 @@ def parse_args() -> argparse.Namespace:
                      help="Output directory for reports and playbook")
 
     # ── Braintrust ───
-    bt = p.add_argument_group("Braintrust logging")
-    bt.add_argument("--braintrust-name", default=None, metavar="NAME",
-                    help="Log results to Braintrust under this experiment name. "
-                         "Omit to skip Braintrust logging.")
-    bt.add_argument("--braintrust-project", default="OpenSCAP-Remediation-Pipeline",
-                    help="Braintrust project name (default: OpenSCAP-Remediation-Pipeline)")
+    bt = p.add_argument_group("Braintrust")
+    bt.add_argument("--experiment-name", default=None,
+                    help="Braintrust experiment name (default: auto-generated from model names + timestamp)")
 
     return p.parse_args()
 
@@ -838,45 +835,51 @@ def main() -> int:
     except Exception as exc:
         console.print(f"[yellow]Triage PDF skipped: {exc}[/yellow]")
 
-    # ── Context / Messages PDFs (one per agent) ──────────────────────
+    # ── Pipeline PDF (full summary) ───────────────────────────────────
     try:
-        ctx_pdfs = write_all_context_pdfs(
-            results=results,
-            work_dir=args.work_dir,
-            output_dir=report_dir,
-            target_host=host or "unknown",
-        )
-        for agent_key, pdf_path in ctx_pdfs.items():
-            console.print(f"[green]Context PDF ({agent_key}): {pdf_path}[/green]")
-        if not ctx_pdfs:
-            console.print("[yellow]No agent transcripts found — context PDFs skipped[/yellow]")
-    except Exception as exc:
-        console.print(f"[yellow]Context PDFs skipped: {exc}[/yellow]")
+        from pipeline_pdf_writer import write_pipeline_pdf
 
-    # ── Braintrust logging ────────────────────────────────────────────
-    if args.braintrust_name:
-        try:
-            shared_model = os.getenv("OPENROUTER_MODEL", "")
-            model_metadata = {
-                "triage": shared_model or os.getenv("TRIAGE_MODEL", args.triage_mode),
-                "remedy": os.getenv("REMEDY_MODEL", ""),
-                "review": args.review_model or shared_model or os.getenv("REVIEW_AGENT_MODEL", ""),
-                "qa": shared_model or os.getenv("QA_AGENT_V2_MODEL", ""),
-            }
-            write_braintrust_eval(
-                report_dir=str(report_dir),
-                results=results,
-                experiment_name=args.braintrust_name,
-                project_name=args.braintrust_project,
-                model_metadata=model_metadata,
-            )
-            console.print(f"[green]Braintrust experiment logged: {args.braintrust_name}[/green]")
-        except Exception as exc:
-            console.print(f"[yellow]Braintrust logging failed: {exc}[/yellow]")
+        pipeline_model_meta = {
+            "triage": getattr(triage_agent, "model", "unknown"),
+            "remedy": getattr(remedy_agent, "model_name", "unknown"),
+            "review": getattr(review_agent, "model", "unknown"),
+            "qa":     getattr(qa_agent_v2, "model", "unknown"),
+        }
+
+        write_pipeline_pdf(
+            results,
+            output_path=report_dir / "pipeline_report.pdf",
+            target_host=host or "unknown",
+            model_metadata=pipeline_model_meta,
+        )
+        console.print(f"[green]Pipeline PDF: {report_dir / 'pipeline_report.pdf'}[/green]")
+    except Exception as exc:
+        console.print(f"[yellow]Pipeline PDF skipped: {exc}[/yellow]")
 
     # ── Summary ───────────────────────────────────────────────────────
     elapsed = time.time() - t0
     print_summary(results, elapsed, fixed_at_round=fixed_at_round, max_rounds=max_rounds)
+
+    # ── Braintrust experiment ─────────────────────────────────────────
+    try:
+        from braintrust_eval_writer import write_braintrust_eval
+
+        # Collect the actual model names from each agent for comparison
+        model_metadata = {
+            "triage": getattr(triage_agent, "model", "unknown"),
+            "remedy": getattr(remedy_agent, "model_name", "unknown"),
+            "review": getattr(review_agent, "model", "unknown"),
+            "qa":     getattr(qa_agent_v2, "model", "unknown"),
+        }
+
+        write_braintrust_eval(
+            report_dir=str(report_dir),
+            results=results,
+            experiment_name=args.experiment_name,
+            model_metadata=model_metadata,
+        )
+    except Exception as exc:
+        console.print(f"[yellow]Braintrust eval skipped: {exc}[/yellow]")
 
     return 0
 

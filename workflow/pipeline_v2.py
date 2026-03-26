@@ -22,6 +22,7 @@ from rich.console import Console
 from agents.triage_agent import TriageAgent
 from agents.remedy_agent_v2 import RemedyAgentV2
 from helpers.agent_report_writer import AgentReportWriter
+from helpers.llm_metrics import LLMMetricsTracker
 from schemas import (
     PreApprovalResult,
     RemedyInput,
@@ -60,68 +61,65 @@ class PipelineV2:
             AgentReportWriter(report_dir, run_id=run_id) if report_dir else None
         )
 
-    def run(
-        self,
-        vulnerability: Vulnerability,
-        *,
-        triage_decision: Optional[TriageDecision] = None,
-        attempt_number: int = 1,
-        previous_attempts: Optional[List[RemediationAttempt]] = None,
-        review_feedback: Optional[str] = None,
-        previous_review_verdicts: Optional[List[ReviewVerdict]] = None,
-    ) -> V2FindingResult:
-        """
-        Run a single vulnerability through one pipeline attempt.
+    def _set_metrics_tracker(self, tracker: LLMMetricsTracker) -> None:
+        """Propagate a metrics tracker to all nested agents."""
+        # Triage
+        self.triage.metrics_tracker = tracker
+        if hasattr(self.triage, "_client"):
+            self.triage._client.metrics_tracker = tracker
+        # Remedy (the inner RemedyAgent)
+        if hasattr(self.remedy_v2, "remedy_agent"):
+            self.remedy_v2.remedy_agent.metrics_tracker = tracker
+        # Review + QA (inside ReviewAgentV2 inside RemedyAgentV2)
+        if hasattr(self.remedy_v2, "review_v2"):
+            rv2 = self.remedy_v2.review_v2
+            if hasattr(rv2, "review_agent"):
+                rv2.review_agent.metrics_tracker = tracker
+            if hasattr(rv2, "qa_agent"):
+                rv2.qa_agent.metrics_tracker = tracker
 
-        Args:
-            vulnerability: The finding to remediate.
-            triage_decision: If provided, skip triage (used for retries).
-            attempt_number: Current attempt number (1-based).
-            previous_attempts: Prior RemediationAttempts for context.
-            review_feedback: Feedback string from prior rejection/failure.
-            previous_review_verdicts: Structured review verdicts from prior attempts.
-        """
+    def run(self, vulnerability: Vulnerability) -> V2FindingResult:
+        """Run a single vulnerability through the v2 pipeline."""
         t0 = time.time()
         vid = vulnerability.id
 
-        # ── Stage 1: Triage (skip if pre-computed) ────────────────────
-        if triage_decision is None:
-            console.print(f"[bold cyan]  [{vid}] Stage 1/2: Triage[/bold cyan]")
-            triage_input = TriageInput(vulnerability=vulnerability)
-            try:
-                triage_decision = self.triage.process(triage_input)
-                if self._writer:
-                    self._writer.write("triage", vid, triage_input, triage_decision)
-            except Exception as exc:
-                console.print(f"[red]  [{vid}] Triage error: {exc}[/red]")
-                triage_decision = TriageDecision(
-                    finding_id=vid,
-                    should_remediate=False,
-                    risk_level="medium",
-                    reason=f"Triage error: {exc}",
-                    requires_human_review=True,
-                )
-                if self._writer:
-                    self._writer.write_error("triage", vid, triage_input, exc)
+        # Create a fresh metrics tracker for this finding
+        tracker = LLMMetricsTracker()
+        self._set_metrics_tracker(tracker)
 
-            if not triage_decision.should_remediate:
-                status = (
-                    "requires_human_review"
-                    if triage_decision.requires_human_review
-                    else "discarded"
-                )
-                console.print(f"[yellow]  [{vid}] Triage → {status}[/yellow]")
-                return V2FindingResult(
-                    vulnerability=vulnerability,
-                    triage=triage_decision,
-                    final_status=status,
-                    total_duration=time.time() - t0,
-                    timestamp=datetime.now().isoformat(timespec="seconds"),
-                )
+        # ── Stage 1: Triage ───────────────────────────────────────────
+        console.print(f"[bold cyan]  [{vid}] Stage 1/2: Triage[/bold cyan]")
+        triage_input = TriageInput(vulnerability=vulnerability)
+        try:
+            triage_decision = self.triage.process(triage_input)
+            if self._writer:
+                self._writer.write("triage", vid, triage_input, triage_decision)
+        except Exception as exc:
+            console.print(f"[red]  [{vid}] Triage error: {exc}[/red]")
+            triage_decision = TriageDecision(
+                finding_id=vid,
+                should_remediate=False,
+                risk_level="medium",
+                reason=f"Triage error: {exc}",
+                requires_human_review=True,
+            )
+            if self._writer:
+                self._writer.write_error("triage", vid, triage_input, exc)
 
-            console.print(
-                f"[green]  [{vid}] Triage → safe to remediate "
-                f"(risk={triage_decision.risk_level})[/green]"
+        if not triage_decision.should_remediate:
+            status = (
+                "requires_human_review"
+                if triage_decision.requires_human_review
+                else "discarded"
+            )
+            console.print(f"[yellow]  [{vid}] Triage → {status}[/yellow]")
+            return V2FindingResult(
+                vulnerability=vulnerability,
+                triage=triage_decision,
+                final_status=status,
+                total_duration=time.time() - t0,
+                timestamp=datetime.now().isoformat(timespec="seconds"),
+                llm_metrics=tracker.summary(),
             )
 
         # ── Stage 2: Single remedy attempt (no scan) ─────────────────
@@ -157,12 +155,19 @@ class PipelineV2:
             f"({elapsed:.1f}s)[/bold]"
         )
 
+        # Build the complete list of all attempts (previous failures + final)
+        all_attempts = list(previous_attempts)
+        if remediation is not None and remediation not in previous_attempts:
+            all_attempts.append(remediation)
+
         return V2FindingResult(
             vulnerability=vulnerability,
             triage=triage_decision,
             remediation=remediation,
+            all_attempts=all_attempts,
             pre_approval=approval,
             final_status="pending_scan",
             total_duration=elapsed,
             timestamp=datetime.now().isoformat(timespec="seconds"),
+            llm_metrics=tracker.summary(),
         )

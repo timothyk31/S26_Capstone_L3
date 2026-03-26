@@ -214,10 +214,18 @@ class V2FindingResult(BaseModel):
     vulnerability: Vulnerability
     triage: TriageDecision
     remediation: Optional[RemediationAttempt] = None
+    all_attempts: List[RemediationAttempt] = Field(
+        default_factory=list,
+        description="Every remediation attempt (including the final one), ordered by attempt number.",
+    )
     pre_approval: Optional[PreApprovalResult] = None
     final_status: str  # "success" | "failed" | "discarded" | "requires_human_review"
     total_duration: float = 0.0
     timestamp: str = ""
+    llm_metrics: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Aggregated LLM call metrics (calls, tokens, cost, duration) from the metrics tracker.",
+    )
 
 
 class V2AggregatedReport(BaseModel):

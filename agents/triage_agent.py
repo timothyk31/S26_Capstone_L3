@@ -70,13 +70,14 @@ class _LLMVerdict(BaseModel):
 @dataclass(frozen=True)
 class ModelSpec:
     name: str
+    temperature: float = 0.0
 
 
 MODELS_BY_MODE: Dict[str, ModelSpec] = {
-    "fast":          ModelSpec(name="meta-llama/llama-3.1-8b-instruct"),
-    "balanced":      ModelSpec(name="anthropic/claude-3.5-sonnet"),
-    "smart":         ModelSpec(name="openai/gpt-4o"),
-    "nemotron_free": ModelSpec(name="nvidia/nemotron-4-mini-instruct"),
+    "fast":          ModelSpec(name="meta-llama/llama-3.1-8b-instruct",  temperature=0.0),
+    "balanced":      ModelSpec(name="anthropic/claude-3.5-sonnet",       temperature=0.0),
+    "smart":         ModelSpec(name="openai/gpt-4o",                     temperature=0.0),
+    "nemotron_free": ModelSpec(name="nvidia/nemotron-4-mini-instruct",   temperature=0.1),
 }
 
 
@@ -89,12 +90,15 @@ class _OpenRouterClient:
         model: str,
         base_url: str = "https://openrouter.ai/api/v1",
         timeout: int = 60,
-        system_prompt: Optional[str] = None,
+        temperature: float = 0.0,
+        metrics_tracker=None,
     ):
         self.api_key = api_key
         self.model = model
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
+        self.temperature = temperature
+        self.metrics_tracker = metrics_tracker
         self.endpoint = f"{self.base_url}/chat/completions"
         self.system_prompt = system_prompt or (
             "You are a security triage assistant for Rocky/RHEL 9 OpenSCAP STIG findings.\n"
@@ -116,6 +120,7 @@ class _OpenRouterClient:
     def classify(self, prompt: str) -> str:
         payload = {
             "model": self.model,
+            "temperature": self.temperature,
             "provider": {"allow_fallbacks": True},
             "response_format": {"type": "json_object"},
             "messages": [
@@ -129,6 +134,9 @@ class _OpenRouterClient:
 
         last_err: Optional[str] = None
         for attempt in range(1, 4):
+            start_time = None
+            if self.metrics_tracker is not None:
+                start_time = self.metrics_tracker.start_call()
             try:
                 _t0 = time.time()
                 r = requests.post(
@@ -140,15 +148,24 @@ class _OpenRouterClient:
                 _api_duration = time.time() - _t0
                 if r.status_code in (429, 500, 502, 503, 504):
                     last_err = f"Transient OpenRouter error {r.status_code}: {r.text}"
+                    if self.metrics_tracker is not None:
+                        self.metrics_tracker.record_call(None, agent="triage", model=self.model, start_time=start_time, error=True, error_message=last_err)
                     time.sleep(0.5 * attempt)
                     continue
                 if r.status_code >= 400:
+                    if self.metrics_tracker is not None:
+                        self.metrics_tracker.record_call(None, agent="triage", model=self.model, start_time=start_time, error=True, error_message=f"HTTP {r.status_code}")
                     raise RuntimeError(f"OpenRouter API error {r.status_code}: {r.text}")
 
                 data = r.json()
-                choice = data.get("choices", [{}])[0]
-                message = choice.get("message", {})
-                content = (message.get("content") or "").strip()
+                if self.metrics_tracker is not None:
+                    self.metrics_tracker.record_call(data, agent="triage", model=self.model, start_time=start_time)
+                content = (
+                    data.get("choices", [{}])[0]
+                    .get("message", {})
+                    .get("content", "")
+                    or ""
+                ).strip()
                 if not content:
                     raise RuntimeError("OpenRouter returned empty content.")
                 usage = data.get("usage")
@@ -156,6 +173,8 @@ class _OpenRouterClient:
 
             except requests.RequestException as e:
                 last_err = f"RequestException: {e}"
+                if self.metrics_tracker is not None and start_time is not None:
+                    self.metrics_tracker.record_call(None, agent="triage", model=self.model, start_time=start_time, error=True, error_message=str(e))
                 time.sleep(0.5 * attempt)
 
         raise RuntimeError(f"OpenRouter classify failed after retries. Last error: {last_err}")
@@ -399,8 +418,7 @@ class TriageAgent(BaseAgent):
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         timeout: int = 60,
-        transcript_dir: Optional[str | Path] = None,
-        max_complexity: str = "high",
+        metrics_tracker=None,
     ):
         self._max_complexity = max_complexity
         self._transcript_dir: Optional[Path] = Path(transcript_dir) if transcript_dir else None
@@ -430,12 +448,14 @@ class TriageAgent(BaseAgent):
                 "for changes that have a genuine risk of locking out access or breaking the system.\n"
             )
 
+        self.metrics_tracker = metrics_tracker
         self._client = _OpenRouterClient(
             api_key=api_key,
             model=chosen_model,
             base_url=base_url or os.getenv("OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"),
             timeout=timeout,
-            system_prompt=system_prompt,
+            temperature=spec.temperature,
+            metrics_tracker=metrics_tracker,
         )
         self._fallback_models: List[str] = fallback_models or []
 
