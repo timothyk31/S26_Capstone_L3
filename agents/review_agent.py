@@ -120,7 +120,7 @@ def _call_llm(
     api_key: str,
     timeout: int = 90,
     metrics_tracker=None,
-) -> str:
+) -> tuple[str, Dict[str, Any], Optional[Dict[str, Any]], float]:
     endpoint = f"{base_url.rstrip('/')}/chat/completions"
     headers = {
         "Content-Type": "application/json",
@@ -138,7 +138,9 @@ def _call_llm(
     if metrics_tracker is not None:
         start_time = metrics_tracker.start_call()
     try:
+        _t0 = time.time()
         resp = requests.post(endpoint, headers=headers, json=payload, timeout=timeout)
+        _api_duration = time.time() - _t0
         if resp.status_code >= 400:
             if metrics_tracker is not None:
                 metrics_tracker.record_call(None, agent="review", model=model, start_time=start_time, error=True, error_message=f"HTTP {resp.status_code}")
@@ -232,6 +234,7 @@ class ReviewAgent:
         model: Optional[str] = None,
         request_timeout: int = 90,
         metrics_tracker=None,
+        transcript_dir: Optional[str | Path] = None,
     ):
         if api_key is None and base_url is None and model is None:
             api_key, base_url, model = _get_config()
@@ -240,6 +243,9 @@ class ReviewAgent:
         self.model = model or os.getenv("OPENROUTER_MODEL") or os.getenv("REVIEW_AGENT_MODEL") or DEFAULT_REVIEW_MODEL
         self.request_timeout = request_timeout
         self.metrics_tracker = metrics_tracker
+        self._transcript_dir: Optional[Path] = Path(transcript_dir) if transcript_dir else None
+        if self._transcript_dir:
+            self._transcript_dir.mkdir(parents=True, exist_ok=True)
 
     def process(self, input_data: ReviewInput, *, attempt: int = 1) -> ReviewVerdict:
         """Run review on one finding: LLM analyzes input and returns a verdict."""

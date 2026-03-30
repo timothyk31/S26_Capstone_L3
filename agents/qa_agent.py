@@ -52,6 +52,7 @@ class QAAgent:
         model: Optional[str] = None,
         max_tool_iterations: int = 24,
         request_timeout: int = 120,
+        transcript_dir: Optional[str | Path] = None,
     ):
         """
         Initialize QA Agent.

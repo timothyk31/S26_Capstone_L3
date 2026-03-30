@@ -860,17 +860,17 @@ def main() -> int:
     elapsed = time.time() - t0
     print_summary(results, elapsed, fixed_at_round=fixed_at_round, max_rounds=max_rounds)
 
+    # ── Collect model metadata (shared by Braintrust + CSV) ────────────
+    model_metadata = {
+        "triage": getattr(triage_agent, "model", "unknown"),
+        "remedy": getattr(remedy_agent, "model_name", "unknown"),
+        "review": getattr(review_agent, "model", "unknown"),
+        "qa":     getattr(qa_agent_v2, "model", "unknown"),
+    }
+
     # ── Braintrust experiment ─────────────────────────────────────────
     try:
         from braintrust_eval_writer import write_braintrust_eval
-
-        # Collect the actual model names from each agent for comparison
-        model_metadata = {
-            "triage": getattr(triage_agent, "model", "unknown"),
-            "remedy": getattr(remedy_agent, "model_name", "unknown"),
-            "review": getattr(review_agent, "model", "unknown"),
-            "qa":     getattr(qa_agent_v2, "model", "unknown"),
-        }
 
         write_braintrust_eval(
             report_dir=str(report_dir),
@@ -880,6 +880,23 @@ def main() -> int:
         )
     except Exception as exc:
         console.print(f"[yellow]Braintrust eval skipped: {exc}[/yellow]")
+
+    # ── CSV export ───────────────────────────────────────────────────────
+    try:
+        from csv_export import write_csv_report
+
+        detail_csv, summary_csv = write_csv_report(
+            results=results,
+            report_dir=str(report_dir),
+            fixed_at_round=fixed_at_round,
+            elapsed=elapsed,
+            model_metadata=model_metadata,
+            max_rounds=max_rounds,
+        )
+        console.print(f"[green]Detail CSV:  {detail_csv}[/green]")
+        console.print(f"[green]Summary CSV: {summary_csv}[/green]")
+    except Exception as exc:
+        console.print(f"[yellow]CSV export skipped: {exc}[/yellow]")
 
     return 0
 

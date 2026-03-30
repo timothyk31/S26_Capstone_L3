@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from rich.console import Console
@@ -49,9 +50,13 @@ class RemedyAgentV2:
         self,
         remedy_agent: RemedyAgent,
         review_agent_v2: ReviewAgentV2,
+        transcript_dir: Optional[str | Path] = None,
     ):
         self.remedy_agent = remedy_agent
         self.review_v2 = review_agent_v2
+        self._transcript_dir: Optional[Path] = Path(transcript_dir) if transcript_dir else None
+        if self._transcript_dir:
+            self._transcript_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -157,9 +162,8 @@ class RemedyAgentV2:
                 "total_api_seconds": total_api_seconds,
                 "per_turn": usage_records,
             }
-        transcript_path = (
-            self.remedy_agent.work_dir / f"remedy_transcript_v2_{session_label}.json"
-        )
+        transcript_base = self._transcript_dir or self.remedy_agent.work_dir
+        transcript_path = transcript_base / f"remedy_transcript_v2_{session_label}.json"
         transcript_path.write_text(
             json.dumps(
                 {"messages": session_result["transcript"], "usage": usage_total or None},
