@@ -482,7 +482,7 @@ def parse_args() -> argparse.Namespace:
                               "(default: high — no extra filtering)")
 
     # ── Parallelism ───
-    pipe_g.add_argument("--max-parallel-groups", type=int, default=4,
+    pipe_g.add_argument("--max-parallel-groups", type=int, default=1
                         help="Max dependency groups to remediate in parallel (default: 4). "
                              "Controls concurrent SSH load on the target host.")
 
