@@ -40,10 +40,13 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
+from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import yaml
 from dotenv import find_dotenv, load_dotenv
@@ -96,6 +99,53 @@ DEFAULT_REMOTE_REPORT = "/tmp/oscap_report.html"
 DEFAULT_LOCAL_REPORT = "oscap_stig_rl9_report.html"
 DEFAULT_WORK_DIR = "./pipeline_work"
 DEFAULT_REPORT_DIR = "./reports"
+
+
+# ── Dependency grouping ───────────────────────────────────────────────────
+
+def classify_finding_group(vuln: Vulnerability) -> str:
+    """Map a vulnerability to a dependency group based on rule name patterns.
+
+    Findings in the same group touch shared system resources and must run
+    serially.  Different groups are independent and can run in parallel.
+    """
+    rule = vuln.rule or vuln.oval_id or vuln.id or ""
+    rule = rule.replace("xccdf_org.ssgproject.content_rule_", "")
+
+    # PAM / password — all touch /etc/pam.d/ and /etc/security/
+    if rule.startswith((
+        "accounts_password_pam_", "accounts_passwords_pam_faillock_",
+        "account_password_pam_", "no_empty_passwords",
+    )):
+        return "pam"
+    if rule.startswith("sysctl_"):
+        return "sysctl"
+    if rule.startswith("mount_option_"):
+        return "mount"
+    if rule.startswith("banner_"):
+        return "banner"
+    if rule.startswith("chronyd_") or rule.startswith("chronyd_or_ntpd"):
+        return "chronyd"
+    # File permissions / ownership — each targets a different file, safe to parallelize
+    if rule.startswith(("file_permissions_", "file_owner_", "file_groupowner_",
+                        "file_permission_")):
+        return f"file__{rule}"
+    # Services and packages — each is independent
+    if rule.startswith("service_") or rule.startswith("package_"):
+        return f"svc_pkg__{rule}"
+    # Default catch-all — runs serially for safety
+    return "misc_serial"
+
+
+def build_dependency_groups(
+    vulns: List[Vulnerability],
+) -> OrderedDict[str, List[Vulnerability]]:
+    """Group vulnerabilities by shared resource.  Preserves original order."""
+    groups: OrderedDict[str, List[Vulnerability]] = OrderedDict()
+    for v in vulns:
+        g = classify_finding_group(v)
+        groups.setdefault(g, []).append(v)
+    return groups
 
 
 # ── Inventory loader ───────────────────────────────────────────────────────
@@ -431,7 +481,10 @@ def parse_args() -> argparse.Namespace:
                               "Findings above this threshold are sent to human review. "
                               "(default: high — no extra filtering)")
 
-    # (Concurrency removed — sequential execution to avoid race conditions)
+    # ── Parallelism ───
+    pipe_g.add_argument("--max-parallel-groups", type=int, default=4,
+                        help="Max dependency groups to remediate in parallel (default: 4). "
+                             "Controls concurrent SSH load on the target host.")
 
     # ── Output ───
     out = p.add_argument_group("Output")
@@ -446,6 +499,72 @@ def parse_args() -> argparse.Namespace:
                     help="Braintrust experiment name (default: auto-generated from model names + timestamp)")
 
     return p.parse_args()
+
+
+# ── Parallel helpers ────────────────────────────────────────────────────────
+
+
+def _create_pipeline_instance(
+    executor: ShellCommandExecutor,
+    scanner: Scanner,
+    args: argparse.Namespace,
+    work_dir: Path,
+    transcript_dir: Path,
+    agent_report_dir: Path,
+    run_id: str,
+) -> PipelineV2:
+    """Create an independent PipelineV2 with its own agent instances (thread-safe)."""
+    ta = TriageAgent(
+        mode=args.triage_mode, lenient=args.lenient_triage,
+        transcript_dir=transcript_dir / "triage",
+        max_complexity=args.max_complexity,
+    )
+    ra = RemedyAgent(
+        executor=executor, scanner=scanner,
+        work_dir=work_dir / "remedy",
+    )
+    rev = ReviewAgent(model=args.review_model, transcript_dir=transcript_dir / "review")
+    qa = QAAgentV2(transcript_dir=transcript_dir / "qa")
+    rev_v2 = ReviewAgentV2(review_agent=rev, qa_agent=qa)
+    rem_v2 = RemedyAgentV2(remedy_agent=ra, review_agent_v2=rev_v2)
+    return PipelineV2(
+        triage_agent=ta, remedy_agent_v2=rem_v2,
+        report_dir=agent_report_dir, run_id=run_id,
+    )
+
+
+def _run_triage_parallel(
+    vulns: List[Vulnerability],
+    args: argparse.Namespace,
+    transcript_dir: Path,
+    max_workers: int,
+) -> Dict[str, TriageDecision]:
+    """Run triage for all findings concurrently.  Returns {vuln.id: TriageDecision}."""
+    from schemas import TriageInput
+
+    def _triage_one(vuln: Vulnerability) -> Tuple[str, TriageDecision]:
+        agent = TriageAgent(
+            mode=args.triage_mode, lenient=args.lenient_triage,
+            transcript_dir=transcript_dir / "triage",
+            max_complexity=args.max_complexity,
+        )
+        try:
+            dec = agent.process(TriageInput(vulnerability=vuln))
+        except Exception as exc:
+            dec = TriageDecision(
+                finding_id=vuln.id, should_remediate=False,
+                risk_level="medium", reason=f"Triage error: {exc}",
+                requires_human_review=True,
+            )
+        return vuln.id, dec
+
+    decisions: Dict[str, TriageDecision] = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_triage_one, v): v for v in vulns}
+        for f in as_completed(futures):
+            vid, dec = f.result()
+            decisions[vid] = dec
+    return decisions
 
 
 # ── Main ────────────────────────────────────────────────────────────────────
@@ -611,62 +730,29 @@ def main() -> int:
         work_dir=str(work_dir / "scans"),
     )
 
-    # ── Initialize agents (V2) ───────────────────────────────────────
+    # ── Initialize shared dirs ─────────────────────────────────────
     transcript_dir = work_dir / "transcripts"
     transcript_dir.mkdir(parents=True, exist_ok=True)
+    agent_report_dir = Path(args.work_dir) / "agent_reports"
 
+    # Keep one "reference" agent set for model-label extraction in reports
     triage_agent = TriageAgent(
         mode=args.triage_mode, lenient=args.lenient_triage,
         transcript_dir=transcript_dir / "triage",
         max_complexity=args.max_complexity,
     )
-
     remedy_agent = RemedyAgent(
-        executor=executor,
-        scanner=scanner,
+        executor=executor, scanner=scanner,
         work_dir=work_dir / "remedy",
     )
-
     review_agent = ReviewAgent(
-        model=args.review_model,
-        transcript_dir=transcript_dir / "review",
+        model=args.review_model, transcript_dir=transcript_dir / "review",
     )
+    qa_agent_v2 = QAAgentV2(transcript_dir=transcript_dir / "qa")
 
-    qa_agent_v2 = QAAgentV2(
-        transcript_dir=transcript_dir / "qa",
-    )
-
-    # V2 wrappers: Review wraps QA, Remedy wraps Review
-    review_agent_v2 = ReviewAgentV2(
-        review_agent=review_agent,
-        qa_agent=qa_agent_v2,
-    )
-
-    remedy_agent_v2 = RemedyAgentV2(
-        remedy_agent=remedy_agent,
-        review_agent_v2=review_agent_v2,
-    )
-
-    # ── Pipeline ─────────────────────────────────────────────────────
-    agent_report_dir = Path(args.work_dir) / "agent_reports"
-
-    pipeline = PipelineV2(
-        triage_agent=triage_agent,
-        remedy_agent_v2=remedy_agent_v2,
-        report_dir=agent_report_dir,
-        run_id=run_id,
-    )
-
-    # ── Per-finding scan + immediate retry loop ──────────────────
-    results: List[V2FindingResult] = []
+    # ── Per-finding scan + retry loop helpers ────────────────────
     total = len(filtered)
     max_rounds = args.max_remedy_attempts
-    fixed_at_round: Dict[int, List[str]] = {}  # attempt_num → [vid, ...]
-
-    console.print(
-        f"\n[bold cyan]── Running V2 pipeline for {total} finding(s) "
-        f"(sequential, up to {max_rounds} attempts each) ──[/bold cyan]\n"
-    )
 
     def _scan_and_update(
         scanner_: "Scanner",
@@ -696,20 +782,83 @@ def main() -> int:
             console=console,
         )
 
-    with _make_progress() as progress:
-        task = progress.add_task("Processing findings", total=total)
-        for vuln in filtered:
+    # ────────────────────────────────────────────────────────────────
+    # Phase A: Parallel Triage
+    # ────────────────────────────────────────────────────────────────
+    console.print(
+        f"\n[bold cyan]── Phase 1: Triage ({total} findings, parallel) ──[/bold cyan]\n"
+    )
+    triage_workers = min(total, args.max_parallel_groups * 2, 12)
+    triage_decisions = _run_triage_parallel(
+        filtered, args, transcript_dir, max_workers=triage_workers,
+    )
+
+    # Separate skipped findings from remediation candidates
+    skip_results: List[V2FindingResult] = []
+    remediate_vulns: List[Vulnerability] = []
+    for v in filtered:
+        dec = triage_decisions[v.id]
+        if not dec.should_remediate:
+            status = "requires_human_review" if dec.requires_human_review else "discarded"
+            skip_results.append(V2FindingResult(
+                vulnerability=v, triage=dec, final_status=status,
+                total_duration=0.0,
+                timestamp=datetime.now().isoformat(timespec="seconds"),
+            ))
+        else:
+            remediate_vulns.append(v)
+
+    console.print(
+        f"[green]Triage complete: {len(remediate_vulns)} to remediate, "
+        f"{len(skip_results)} skipped/review[/green]"
+    )
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase B: Build dependency groups
+    # ────────────────────────────────────────────────────────────────
+    groups = build_dependency_groups(remediate_vulns)
+    console.print(
+        f"\n[bold cyan]── Phase 2: Dependency groups "
+        f"({len(groups)} groups from {len(remediate_vulns)} findings) ──[/bold cyan]"
+    )
+    for gname, gvulns in groups.items():
+        console.print(f"  {gname}: {len(gvulns)} finding(s)")
+
+    # ────────────────────────────────────────────────────────────────
+    # Phase C: Parallel group execution
+    # ────────────────────────────────────────────────────────────────
+    console.print(
+        f"\n[bold cyan]── Phase 3: Remediate "
+        f"(max {args.max_parallel_groups} groups in parallel, "
+        f"up to {max_rounds} attempts each) ──[/bold cyan]\n"
+    )
+
+    # Thread-safe progress + result collection
+    progress_lock = threading.Lock()
+    results_lock = threading.Lock()
+    all_group_results: List[V2FindingResult] = []
+    fixed_at_round: Dict[int, List[str]] = {}
+
+    def _process_group(
+        group_name: str,
+        group_vulns: List[Vulnerability],
+        pip: PipelineV2,
+        progress_bar: Progress,
+        progress_task,
+    ) -> None:
+        """Process all findings in one dependency group serially."""
+        for vuln in group_vulns:
             attempts: List[RemediationAttempt] = []
-            triage_decision: TriageDecision | None = None
+            triage_decision: TriageDecision = triage_decisions[vuln.id]
             review_feedback: str | None = None
             review_verdicts: List[ReviewVerdict] = []
             result: V2FindingResult | None = None
 
             for attempt_num in range(1, max_rounds + 1):
                 try:
-                    result = pipeline.run(
+                    result = pip.run(
                         vuln,
-                        triage_decision=triage_decision if attempt_num > 1 else None,
+                        triage_decision=triage_decision,
                         attempt_number=attempt_num,
                         previous_attempts=attempts,
                         review_feedback=review_feedback,
@@ -719,29 +868,19 @@ def main() -> int:
                     console.print(f"[red]Pipeline error for {vuln.id}: {exc}[/red]")
                     result = V2FindingResult(
                         vulnerability=vuln,
-                        triage=triage_decision or TriageDecision(
-                            finding_id=vuln.id,
-                            should_remediate=False,
-                            risk_level="medium",
-                            reason=f"Pipeline error: {exc}",
-                            requires_human_review=True,
-                        ),
+                        triage=triage_decision,
                         final_status="failed",
                         total_duration=0.0,
                         timestamp=datetime.now().isoformat(timespec="seconds"),
                     )
                     break
 
-                # Save triage for reuse in retries
                 triage_decision = result.triage
 
-                # If triage said don't remediate, stop
                 if result.final_status in ("discarded", "requires_human_review"):
                     break
 
-                # If remediation was attempted, check approval before scanning
                 if result.remediation is not None and result.final_status == "pending_scan":
-                    # Track review state for retries
                     if result.pre_approval:
                         review_verdicts.append(result.pre_approval.review_verdict)
                         if not result.pre_approval.approved:
@@ -749,62 +888,87 @@ def main() -> int:
                         else:
                             review_feedback = None
 
-                    # If review or QA rejected, skip the scan and end the attempt
                     if result.pre_approval and not result.pre_approval.approved:
-                        result = result.model_copy(
-                            update={"final_status": "failed"}
-                        )
+                        result = result.model_copy(update={"final_status": "failed"})
                         attempts.append(result.remediation)
                         reason = result.pre_approval.rejection_reason or "review/QA rejected"
                         console.print(
                             f"  [{vuln.id}] attempt {attempt_num} "
                             f"review/QA rejected — skipping scan ({reason})"
                         )
-                        # Write attempt JSON
                         out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vuln.id)
                         out_path = out_dir / f"attempt_{attempt_num}_output.json"
                         if out_dir.exists():
                             out_path.write_text(
-                                json.dumps(
-                                    result.remediation.model_dump(mode="json"),
-                                    indent=2, default=str,
-                                ),
+                                json.dumps(result.remediation.model_dump(mode="json"),
+                                           indent=2, default=str),
                                 encoding="utf-8",
                             )
                         break
 
-                    # Review/QA approved — scan to verify
                     result, is_fixed, scan_dur = _scan_and_update(scanner, vuln, result)
                     attempts.append(result.remediation)
 
-                    rule = vuln.rule or vuln.id
-                    status = "PASS" if is_fixed else "FAIL"
+                    rule_label = vuln.rule or vuln.id
+                    status_label = "PASS" if is_fixed else "FAIL"
                     console.print(
-                        f"  [{vuln.id}] ({rule}) attempt {attempt_num} "
-                        f"scan → {status} ({scan_dur:.1f}s)"
+                        f"  [{vuln.id}] ({rule_label}) attempt {attempt_num} "
+                        f"scan -> {status_label} ({scan_dur:.1f}s)"
                     )
 
-                    # Write attempt JSON (scan results already populated)
                     out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vuln.id)
                     out_path = out_dir / f"attempt_{attempt_num}_output.json"
                     if out_dir.exists():
                         out_path.write_text(
-                            json.dumps(
-                                result.remediation.model_dump(mode="json"),
-                                indent=2, default=str,
-                            ),
+                            json.dumps(result.remediation.model_dump(mode="json"),
+                                       indent=2, default=str),
                             encoding="utf-8",
                         )
 
                     if is_fixed:
-                        fixed_at_round.setdefault(attempt_num, []).append(vuln.id)
+                        with results_lock:
+                            fixed_at_round.setdefault(attempt_num, []).append(vuln.id)
                         break
-                    # else: loop continues to next attempt
                 else:
-                    break  # no remediation produced, no point retrying
+                    break
 
-            results.append(result)
-            progress.advance(task)
+            with results_lock:
+                all_group_results.append(result)
+            with progress_lock:
+                progress_bar.advance(progress_task)
+
+    # Launch groups in parallel
+    with _make_progress() as progress:
+        ptask = progress.add_task("Processing findings", total=total)
+
+        # Advance progress for triage-skipped findings immediately
+        with progress_lock:
+            progress.advance(ptask, advance=len(skip_results))
+
+        max_workers = min(len(groups), args.max_parallel_groups)
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {}
+            for gname, gvulns in groups.items():
+                pip = _create_pipeline_instance(
+                    executor, scanner, args, work_dir,
+                    transcript_dir, agent_report_dir, run_id,
+                )
+                fut = pool.submit(
+                    _process_group, gname, gvulns, pip, progress, ptask,
+                )
+                futures[fut] = gname
+
+            for fut in as_completed(futures):
+                gname = futures[fut]
+                try:
+                    fut.result()  # raises if _process_group raised
+                except Exception as exc:
+                    console.print(f"[red]Group '{gname}' failed: {exc}[/red]")
+
+    # Combine and re-sort results to original finding order
+    results: List[V2FindingResult] = list(skip_results) + all_group_results
+    vuln_order = {v.id: i for i, v in enumerate(filtered)}
+    results.sort(key=lambda r: vuln_order.get(r.vulnerability.id, float("inf")))
 
     # ── Save results JSON + text report ──────────────────────────────
     model_label = getattr(remedy_agent, "model_name", "unknown")

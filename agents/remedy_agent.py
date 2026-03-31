@@ -374,6 +374,24 @@ class RemedyAgent:
         ]
 
     # -------------------------
+    # Context management
+    # -------------------------
+
+    _MAX_TOOL_OUTPUT_CHARS = 1500
+
+    def _truncate_tool_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Truncate large fields in tool results to keep context within budget."""
+        limit = self._MAX_TOOL_OUTPUT_CHARS
+        for key in ("stdout", "stderr", "content"):
+            val = payload.get(key)
+            if isinstance(val, str) and len(val) > limit:
+                payload[key] = val[:limit] + f"\n... [truncated, {len(val)} chars total]"
+        # Drop fields the LLM doesn't need for reasoning
+        for key in ("duration", "normalized_from", "truncated_stdout", "truncated_stderr"):
+            payload.pop(key, None)
+        return payload
+
+    # -------------------------
     # Tool-calling loop
     # -------------------------
 
@@ -482,7 +500,7 @@ class RemedyAgent:
                     result = self._tool_run_cmd(command)
                     commands_executed.append(result.command)
                     execution_details.append(result)
-                    payload = result.model_dump()
+                    payload = self._truncate_tool_payload(result.model_dump())
                     cmd_label = command
 
                 elif name == "read_file":
@@ -490,7 +508,7 @@ class RemedyAgent:
                     result = self.executor.read_file(path)
                     files_read.append(path)
                     execution_details.append(result)
-                    payload = result.model_dump()
+                    payload = self._truncate_tool_payload(result.model_dump())
                     cmd_label = path
 
                 elif name == "write_file":
@@ -500,7 +518,7 @@ class RemedyAgent:
                     result = self.executor.write_file(path, content, mode=mode)
                     files_modified.append(path)
                     execution_details.append(result)
-                    payload = result.model_dump()
+                    payload = self._truncate_tool_payload(result.model_dump())
                     cmd_label = path
 
                 else:

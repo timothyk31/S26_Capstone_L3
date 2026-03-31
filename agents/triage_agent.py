@@ -123,7 +123,6 @@ class _OpenRouterClient:
             "model": self.model,
             "temperature": self.temperature,
             "provider": {"allow_fallbacks": True},
-            "response_format": {"type": "json_object"},
             "messages": [
                 {
                     "role": "system",
