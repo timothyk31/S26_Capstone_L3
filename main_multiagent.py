@@ -904,7 +904,7 @@ def main() -> int:
                                            indent=2, default=str),
                                 encoding="utf-8",
                             )
-                        break
+                        continue
 
                     result, is_fixed, scan_dur = _scan_and_update(scanner, vuln, result)
                     attempts.append(result.remediation)
