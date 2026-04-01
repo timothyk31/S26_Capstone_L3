@@ -87,10 +87,12 @@ class PipelineV2:
         previous_attempts: Optional[List[RemediationAttempt]] = None,
         review_feedback: Optional[str] = None,
         previous_review_verdicts: Optional[List[ReviewVerdict]] = None,
+        group_label: Optional[str] = None,
     ) -> V2FindingResult:
         """Run a single vulnerability through the v2 pipeline."""
         t0 = time.time()
         vid = vulnerability.id
+        tag = f"[dim]\\[{group_label}][/dim] " if group_label else ""
 
         normalized_previous_attempts = list(previous_attempts or [])
         normalized_previous_review_verdicts = list(previous_review_verdicts or [])
@@ -101,14 +103,14 @@ class PipelineV2:
 
         # ── Stage 1: Triage ───────────────────────────────────────────
         if triage_decision is None:
-            console.print(f"[bold cyan]  [{vid}] Stage 1/2: Triage[/bold cyan]")
+            console.print(f"{tag}[bold cyan]  [{vid}] Stage 1/2: Triage[/bold cyan]")
             triage_input = TriageInput(vulnerability=vulnerability)
             try:
                 triage_decision = self.triage.process(triage_input)
                 if self._writer:
                     self._writer.write("triage", vid, triage_input, triage_decision)
             except Exception as exc:
-                console.print(f"[red]  [{vid}] Triage error: {exc}[/red]")
+                console.print(f"{tag}[red]  [{vid}] Triage error: {exc}[/red]")
                 triage_decision = TriageDecision(
                     finding_id=vid,
                     should_remediate=False,
@@ -125,7 +127,7 @@ class PipelineV2:
                 if triage_decision.requires_human_review
                 else "discarded"
             )
-            console.print(f"[yellow]  [{vid}] Triage → {status}[/yellow]")
+            console.print(f"{tag}[yellow]  [{vid}] Triage → {status}[/yellow]")
             return V2FindingResult(
                 vulnerability=vulnerability,
                 triage=triage_decision,
@@ -137,7 +139,7 @@ class PipelineV2:
 
         # ── Stage 2: Single remedy attempt (no scan) ─────────────────
         console.print(
-            f"[bold cyan]  [{vid}] Stage 2/2: Remedy+Approval "
+            f"{tag}[bold cyan]  [{vid}] Stage 2/2: Remedy+Approval "
             f"(attempt {attempt_number})[/bold cyan]"
         )
 
@@ -160,11 +162,11 @@ class PipelineV2:
                     "remedy_v2", vid, remedy_input, dump, attempt=attempt_number,
                 )
             except Exception as exc:
-                console.print(f"[red]  [{vid}] Report write error: {exc}[/red]")
+                console.print(f"{tag}[red]  [{vid}] Report write error: {exc}[/red]")
 
         elapsed = time.time() - t0
         console.print(
-            f"[bold]  [{vid}] V2 Pipeline attempt {attempt_number} complete "
+            f"{tag}[bold]  [{vid}] V2 Pipeline attempt {attempt_number} complete "
             f"({elapsed:.1f}s)[/bold]"
         )
 
