@@ -57,7 +57,7 @@ def _build_round_lookup(
 
 # ── Detail CSV columns ────────────────────────────────────────────────────────
 
-DETAIL_COLUMNS = [
+_DETAIL_COLUMNS_BASE = [
     # Identification
     "finding_id", "title", "severity", "host", "rule", "oval_id", "scan_class", "os",
     # Triage
@@ -65,9 +65,14 @@ DETAIL_COLUMNS = [
     "triage_requires_human_review", "triage_estimated_impact", "triage_estimated_complexity",
     # Result
     "final_status", "remediated_at_round", "total_attempts",
-    # Remedy (final attempt)
-    "remedy_commands_executed", "remedy_scan_passed", "remedy_success",
-    "remedy_error_summary", "remedy_attempt_duration_s", "remedy_scan_duration_s",
+]
+
+# Per-attempt columns are inserted dynamically: attempt_N_commands, attempt_N_scan_passed,
+# attempt_N_success, attempt_N_error_summary, attempt_N_duration_s, attempt_N_scan_duration_s
+
+_ATTEMPT_FIELDS = ["commands", "scan_passed", "success", "error_summary", "duration_s", "scan_duration_s"]
+
+_DETAIL_COLUMNS_TAIL = [
     # Review
     "review_approve", "review_is_optimal", "review_security_score",
     "review_feedback", "review_concerns",
@@ -89,21 +94,36 @@ DETAIL_COLUMNS = [
 ]
 
 
+def _build_detail_columns(max_rounds: int) -> List[str]:
+    """Build the full column list with per-attempt columns for each round."""
+    cols = list(_DETAIL_COLUMNS_BASE)
+    for n in range(1, max_rounds + 1):
+        for field in _ATTEMPT_FIELDS:
+            cols.append(f"attempt_{n}_{field}")
+    cols.extend(_DETAIL_COLUMNS_TAIL)
+    return cols
+
+
 def _build_finding_row(
     r: "V2FindingResult",
     round_lookup: Dict[str, int],
     model_metadata: Optional[Dict[str, str]],
+    max_rounds: int = 3,
 ) -> Dict[str, Any]:
-    """Flatten a single V2FindingResult into a dict matching DETAIL_COLUMNS."""
+    """Flatten a single V2FindingResult into a dict matching detail columns."""
     v = r.vulnerability
     t = r.triage
-    rm = r.remediation
     pa = r.pre_approval
     rv = pa.review_verdict if pa else None
     qa = pa.qa_result if pa else None
     llm = r.llm_metrics or {}
     per_agent = llm.get("per_agent", {})
     meta = model_metadata or {}
+
+    # Index attempts by attempt_number for lookup
+    attempts_by_num: Dict[int, Any] = {}
+    for att in r.all_attempts:
+        attempts_by_num[att.attempt_number] = att
 
     row: Dict[str, Any] = {
         # Identification
@@ -126,13 +146,19 @@ def _build_finding_row(
         "final_status": r.final_status,
         "remediated_at_round": round_lookup.get(v.id, ""),
         "total_attempts": len(r.all_attempts),
-        # Remedy (final)
-        "remedy_commands_executed": _join(rm.commands_executed) if rm else "",
-        "remedy_scan_passed": rm.scan_passed if rm else "",
-        "remedy_success": rm.success if rm else "",
-        "remedy_error_summary": _sanitize(rm.error_summary) if rm else "",
-        "remedy_attempt_duration_s": rm.attempt_duration if rm else "",
-        "remedy_scan_duration_s": rm.scan_duration if rm else "",
+    }
+
+    # Per-attempt columns
+    for n in range(1, max_rounds + 1):
+        att = attempts_by_num.get(n)
+        row[f"attempt_{n}_commands"] = _join(att.commands_executed) if att else ""
+        row[f"attempt_{n}_scan_passed"] = att.scan_passed if att else ""
+        row[f"attempt_{n}_success"] = att.success if att else ""
+        row[f"attempt_{n}_error_summary"] = _sanitize(att.error_summary) if att else ""
+        row[f"attempt_{n}_duration_s"] = att.attempt_duration if att else ""
+        row[f"attempt_{n}_scan_duration_s"] = att.scan_duration if att else ""
+
+    row.update({
         # Review
         "review_approve": rv.approve if rv else "",
         "review_is_optimal": rv.is_optimal if rv else "",
@@ -178,7 +204,7 @@ def _build_finding_row(
         "remedy_model": meta.get("remedy", ""),
         "review_model": meta.get("review", ""),
         "qa_model": meta.get("qa", ""),
-    }
+    })
     return row
 
 
@@ -340,9 +366,10 @@ def write_csv_report(
     round_lookup = _build_round_lookup(fixed_at_round)
 
     # ── Detail CSV ──
-    detail_rows = [_build_finding_row(r, round_lookup, model_metadata) for r in results]
+    detail_columns = _build_detail_columns(max_rounds)
+    detail_rows = [_build_finding_row(r, round_lookup, model_metadata, max_rounds) for r in results]
     with open(detail_path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=DETAIL_COLUMNS)
+        writer = csv.DictWriter(f, fieldnames=detail_columns)
         writer.writeheader()
         writer.writerows(detail_rows)
 
