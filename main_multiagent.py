@@ -46,7 +46,7 @@ from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import yaml
 from dotenv import find_dotenv, load_dotenv
@@ -533,40 +533,6 @@ def _create_pipeline_instance(
     )
 
 
-def _run_triage_parallel(
-    vulns: List[Vulnerability],
-    args: argparse.Namespace,
-    transcript_dir: Path,
-    max_workers: int,
-) -> Dict[str, TriageDecision]:
-    """Run triage for all findings concurrently.  Returns {vuln.id: TriageDecision}."""
-    from schemas import TriageInput
-
-    def _triage_one(vuln: Vulnerability) -> Tuple[str, TriageDecision]:
-        agent = TriageAgent(
-            mode=args.triage_mode, lenient=args.lenient_triage,
-            transcript_dir=transcript_dir / "triage",
-            max_complexity=args.max_complexity,
-        )
-        try:
-            dec = agent.process(TriageInput(vulnerability=vuln))
-        except Exception as exc:
-            dec = TriageDecision(
-                finding_id=vuln.id, should_remediate=False,
-                risk_level="medium", reason=f"Triage error: {exc}",
-                requires_human_review=True,
-            )
-        return vuln.id, dec
-
-    decisions: Dict[str, TriageDecision] = {}
-    with ThreadPoolExecutor(max_workers=max_workers) as pool:
-        futures = {pool.submit(_triage_one, v): v for v in vulns}
-        for f in as_completed(futures):
-            vid, dec = f.result()
-            decisions[vid] = dec
-    return decisions
-
-
 # ── Main ────────────────────────────────────────────────────────────────────
 
 def main() -> int:
@@ -783,52 +749,21 @@ def main() -> int:
         )
 
     # ────────────────────────────────────────────────────────────────
-    # Phase A: Parallel Triage
+    # Phase A: Build dependency groups
     # ────────────────────────────────────────────────────────────────
+    groups = build_dependency_groups(filtered)
     console.print(
-        f"\n[bold cyan]── Phase 1: Triage ({total} findings, parallel) ──[/bold cyan]\n"
-    )
-    triage_workers = min(total, args.max_parallel_groups * 2, 12)
-    triage_decisions = _run_triage_parallel(
-        filtered, args, transcript_dir, max_workers=triage_workers,
-    )
-
-    # Separate skipped findings from remediation candidates
-    skip_results: List[V2FindingResult] = []
-    remediate_vulns: List[Vulnerability] = []
-    for v in filtered:
-        dec = triage_decisions[v.id]
-        if not dec.should_remediate:
-            status = "requires_human_review" if dec.requires_human_review else "discarded"
-            skip_results.append(V2FindingResult(
-                vulnerability=v, triage=dec, final_status=status,
-                total_duration=0.0,
-                timestamp=datetime.now().isoformat(timespec="seconds"),
-            ))
-        else:
-            remediate_vulns.append(v)
-
-    console.print(
-        f"[green]Triage complete: {len(remediate_vulns)} to remediate, "
-        f"{len(skip_results)} skipped/review[/green]"
-    )
-
-    # ────────────────────────────────────────────────────────────────
-    # Phase B: Build dependency groups
-    # ────────────────────────────────────────────────────────────────
-    groups = build_dependency_groups(remediate_vulns)
-    console.print(
-        f"\n[bold cyan]── Phase 2: Dependency groups "
-        f"({len(groups)} groups from {len(remediate_vulns)} findings) ──[/bold cyan]"
+        f"\n[bold cyan]── Phase 1: Dependency groups "
+        f"({len(groups)} groups from {total} findings) ──[/bold cyan]"
     )
     for gname, gvulns in groups.items():
         console.print(f"  {gname}: {len(gvulns)} finding(s)")
 
     # ────────────────────────────────────────────────────────────────
-    # Phase C: Parallel group execution
+    # Phase B: Parallel group execution (triage runs inline per-finding)
     # ────────────────────────────────────────────────────────────────
     console.print(
-        f"\n[bold cyan]── Phase 3: Remediate "
+        f"\n[bold cyan]── Phase 2: Triage + Remediate "
         f"(max {args.max_parallel_groups} groups in parallel, "
         f"up to {max_rounds} attempts each) ──[/bold cyan]\n"
     )
@@ -847,9 +782,10 @@ def main() -> int:
         progress_task,
     ) -> None:
         """Process all findings in one dependency group serially."""
+        tag = f"[dim]\\[{group_name}][/dim] "
         for vuln in group_vulns:
             attempts: List[RemediationAttempt] = []
-            triage_decision: TriageDecision = triage_decisions[vuln.id]
+            triage_decision: TriageDecision | None = None
             review_feedback: str | None = None
             review_verdicts: List[ReviewVerdict] = []
             result: V2FindingResult | None = None
@@ -858,23 +794,31 @@ def main() -> int:
                 try:
                     result = pip.run(
                         vuln,
-                        triage_decision=triage_decision,
+                        triage_decision=triage_decision if attempt_num > 1 else None,
                         attempt_number=attempt_num,
                         previous_attempts=attempts,
                         review_feedback=review_feedback,
                         previous_review_verdicts=review_verdicts,
+                        group_label=group_name,
                     )
                 except Exception as exc:
-                    console.print(f"[red]Pipeline error for {vuln.id}: {exc}[/red]")
+                    console.print(f"{tag}[red]Pipeline error for {vuln.id}: {exc}[/red]")
                     result = V2FindingResult(
                         vulnerability=vuln,
-                        triage=triage_decision,
+                        triage=triage_decision or TriageDecision(
+                            finding_id=vuln.id,
+                            should_remediate=False,
+                            risk_level="medium",
+                            reason=f"Pipeline error: {exc}",
+                            requires_human_review=True,
+                        ),
                         final_status="failed",
                         total_duration=0.0,
                         timestamp=datetime.now().isoformat(timespec="seconds"),
                     )
                     break
 
+                # Save triage for reuse in retries
                 triage_decision = result.triage
 
                 if result.final_status in ("discarded", "requires_human_review"):
@@ -893,7 +837,7 @@ def main() -> int:
                         attempts.append(result.remediation)
                         reason = result.pre_approval.rejection_reason or "review/QA rejected"
                         console.print(
-                            f"  [{vuln.id}] attempt {attempt_num} "
+                            f"{tag}  [{vuln.id}] attempt {attempt_num} "
                             f"review/QA rejected — skipping scan ({reason})"
                         )
                         out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vuln.id)
@@ -912,7 +856,7 @@ def main() -> int:
                     rule_label = vuln.rule or vuln.id
                     status_label = "PASS" if is_fixed else "FAIL"
                     console.print(
-                        f"  [{vuln.id}] ({rule_label}) attempt {attempt_num} "
+                        f"{tag}  [{vuln.id}] ({rule_label}) attempt {attempt_num} "
                         f"scan -> {status_label} ({scan_dur:.1f}s)"
                     )
 
@@ -941,10 +885,6 @@ def main() -> int:
     with _make_progress() as progress:
         ptask = progress.add_task("Processing findings", total=total)
 
-        # Advance progress for triage-skipped findings immediately
-        with progress_lock:
-            progress.advance(ptask, advance=len(skip_results))
-
         max_workers = min(len(groups), args.max_parallel_groups)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {}
@@ -963,10 +903,10 @@ def main() -> int:
                 try:
                     fut.result()  # raises if _process_group raised
                 except Exception as exc:
-                    console.print(f"[red]Group '{gname}' failed: {exc}[/red]")
+                    console.print(f"[dim]\\[{gname}][/dim] [red]Group failed: {exc}[/red]")
 
     # Combine and re-sort results to original finding order
-    results: List[V2FindingResult] = list(skip_results) + all_group_results
+    results: List[V2FindingResult] = list(all_group_results)
     vuln_order = {v.id: i for i, v in enumerate(filtered)}
     results.sort(key=lambda r: vuln_order.get(r.vulnerability.id, float("inf")))
 
