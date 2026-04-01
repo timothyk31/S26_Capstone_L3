@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from rich.console import Console
@@ -49,9 +50,13 @@ class RemedyAgentV2:
         self,
         remedy_agent: RemedyAgent,
         review_agent_v2: ReviewAgentV2,
+        transcript_dir: Optional[str | Path] = None,
     ):
         self.remedy_agent = remedy_agent
         self.review_v2 = review_agent_v2
+        self._transcript_dir: Optional[Path] = Path(transcript_dir) if transcript_dir else None
+        if self._transcript_dir:
+            self._transcript_dir.mkdir(parents=True, exist_ok=True)
 
     # ------------------------------------------------------------------ #
     #  Public API                                                          #
@@ -157,9 +162,8 @@ class RemedyAgentV2:
                 "total_api_seconds": total_api_seconds,
                 "per_turn": usage_records,
             }
-        transcript_path = (
-            self.remedy_agent.work_dir / f"remedy_transcript_v2_{session_label}.json"
-        )
+        transcript_base = self._transcript_dir or self.remedy_agent.work_dir
+        transcript_path = transcript_base / f"remedy_transcript_v2_{session_label}.json"
         transcript_path.write_text(
             json.dumps(
                 {"messages": session_result["transcript"], "usage": usage_total or None},
@@ -410,20 +414,15 @@ class RemedyAgentV2:
                             console.print(
                                 f"[yellow]  [{vuln.id}] review_plan cap reached "
                                 f"({consecutive_review_rejections} consecutive "
-                                f"rejections) — forcing LLM to proceed[/yellow]"
+                                f"rejections) — ending attempt[/yellow]"
                             )
-                            payload["instruction"] = (
-                                f"MAX REVIEW RETRIES EXCEEDED "
-                                f"({consecutive_review_rejections} consecutive "
-                                f"rejections). Do NOT call review_plan again. "
-                                f"Proceed immediately with run_cmd / read_file / "
-                                f"write_file to apply your best remediation plan."
-                            )
-                            payload["review_plan_capped"] = True
-                            v2_tools = [
-                                t for t in v2_tools
-                                if t.get("function", {}).get("name") != "review_plan"
-                            ]
+                            # End the session — don't force the LLM to apply a rejected plan
+                            result_content = json.dumps(payload)
+                            cmd_label = "review_plan"
+                            cmd_duration = time.time() - _cmd_t0
+                            _review_total_seconds += cmd_duration
+                            _last_review_end_time = time.time()
+                            break
 
                     result_content = json.dumps(payload)
                     cmd_label = "review_plan"
@@ -486,7 +485,7 @@ class RemedyAgentV2:
                 if tool_calls_used >= max_tool_calls:
                     break
 
-            if tool_calls_used >= max_tool_calls:
+            if tool_calls_used >= max_tool_calls or review_plan_capped:
                 break
 
         # Compute step_durations from wall-clock phase boundaries

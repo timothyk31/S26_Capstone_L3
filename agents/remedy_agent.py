@@ -89,6 +89,7 @@ class RemedyAgent:
         max_tool_iterations: int = 15,
         request_timeout: int = 120,
         metrics_tracker=None,
+        transcript_dir: Optional[str | Path] = None,
     ):
         self.executor = executor
         self.scanner = scanner

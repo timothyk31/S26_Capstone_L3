@@ -78,33 +78,46 @@ class PipelineV2:
             if hasattr(rv2, "qa_agent"):
                 rv2.qa_agent.metrics_tracker = tracker
 
-    def run(self, vulnerability: Vulnerability) -> V2FindingResult:
+    def run(
+        self,
+        vulnerability: Vulnerability,
+        *,
+        triage_decision: Optional[TriageDecision] = None,
+        attempt_number: int = 1,
+        previous_attempts: Optional[List[RemediationAttempt]] = None,
+        review_feedback: Optional[str] = None,
+        previous_review_verdicts: Optional[List[ReviewVerdict]] = None,
+    ) -> V2FindingResult:
         """Run a single vulnerability through the v2 pipeline."""
         t0 = time.time()
         vid = vulnerability.id
+
+        normalized_previous_attempts = list(previous_attempts or [])
+        normalized_previous_review_verdicts = list(previous_review_verdicts or [])
 
         # Create a fresh metrics tracker for this finding
         tracker = LLMMetricsTracker()
         self._set_metrics_tracker(tracker)
 
         # ── Stage 1: Triage ───────────────────────────────────────────
-        console.print(f"[bold cyan]  [{vid}] Stage 1/2: Triage[/bold cyan]")
-        triage_input = TriageInput(vulnerability=vulnerability)
-        try:
-            triage_decision = self.triage.process(triage_input)
-            if self._writer:
-                self._writer.write("triage", vid, triage_input, triage_decision)
-        except Exception as exc:
-            console.print(f"[red]  [{vid}] Triage error: {exc}[/red]")
-            triage_decision = TriageDecision(
-                finding_id=vid,
-                should_remediate=False,
-                risk_level="medium",
-                reason=f"Triage error: {exc}",
-                requires_human_review=True,
-            )
-            if self._writer:
-                self._writer.write_error("triage", vid, triage_input, exc)
+        if triage_decision is None:
+            console.print(f"[bold cyan]  [{vid}] Stage 1/2: Triage[/bold cyan]")
+            triage_input = TriageInput(vulnerability=vulnerability)
+            try:
+                triage_decision = self.triage.process(triage_input)
+                if self._writer:
+                    self._writer.write("triage", vid, triage_input, triage_decision)
+            except Exception as exc:
+                console.print(f"[red]  [{vid}] Triage error: {exc}[/red]")
+                triage_decision = TriageDecision(
+                    finding_id=vid,
+                    should_remediate=False,
+                    risk_level="medium",
+                    reason=f"Triage error: {exc}",
+                    requires_human_review=True,
+                )
+                if self._writer:
+                    self._writer.write_error("triage", vid, triage_input, exc)
 
         if not triage_decision.should_remediate:
             status = (
@@ -132,9 +145,9 @@ class PipelineV2:
             vulnerability=vulnerability,
             triage_decision=triage_decision,
             attempt_number=attempt_number,
-            previous_attempts=previous_attempts or [],
+            previous_attempts=normalized_previous_attempts,
             review_feedback=review_feedback,
-            previous_review_verdicts=previous_review_verdicts or [],
+            previous_review_verdicts=normalized_previous_review_verdicts,
         )
 
         remediation, approval = self.remedy_v2.process(remedy_input)
@@ -156,8 +169,8 @@ class PipelineV2:
         )
 
         # Build the complete list of all attempts (previous failures + final)
-        all_attempts = list(previous_attempts)
-        if remediation is not None and remediation not in previous_attempts:
+        all_attempts = list(normalized_previous_attempts)
+        if remediation is not None and remediation not in normalized_previous_attempts:
             all_attempts.append(remediation)
 
         return V2FindingResult(

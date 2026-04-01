@@ -92,6 +92,7 @@ class _OpenRouterClient:
         timeout: int = 60,
         temperature: float = 0.0,
         metrics_tracker=None,
+        system_prompt: Optional[str] = None,
     ):
         self.api_key = api_key
         self.model = model
@@ -117,7 +118,7 @@ class _OpenRouterClient:
         if title:
             self.headers["X-Title"] = title
 
-    def classify(self, prompt: str) -> str:
+    def classify(self, prompt: str) -> tuple[str, Dict[str, Any], Optional[Dict[str, Any]], float]:
         payload = {
             "model": self.model,
             "temperature": self.temperature,
@@ -160,12 +161,8 @@ class _OpenRouterClient:
                 data = r.json()
                 if self.metrics_tracker is not None:
                     self.metrics_tracker.record_call(data, agent="triage", model=self.model, start_time=start_time)
-                content = (
-                    data.get("choices", [{}])[0]
-                    .get("message", {})
-                    .get("content", "")
-                    or ""
-                ).strip()
+                message = data.get("choices", [{}])[0].get("message", {}) or {}
+                content = (message.get("content", "") or "").strip()
                 if not content:
                     raise RuntimeError("OpenRouter returned empty content.")
                 usage = data.get("usage")
@@ -413,6 +410,8 @@ class TriageAgent(BaseAgent):
         *,
         mode: str = "balanced",
         lenient: bool = False,
+        max_complexity: Optional[str] = None,
+        transcript_dir: Optional[str] = None,
         model_override: Optional[str] = None,
         fallback_models: Optional[List[str]] = None,
         api_key: Optional[str] = None,
