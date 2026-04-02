@@ -452,7 +452,7 @@ def write_pipeline_pdf(
                     ["Commands", ", ".join(att.commands_executed[:5]) if att.commands_executed else "\u2014"],
                     ["Scan Passed", _bool_icon(att.scan_passed)],
                     ["Success", _bool_icon(att.success)],
-                    ["Duration", f"{att.duration:.1f}s" if att.duration else "\u2014"],
+                    ["Duration", f"{att.attempt_duration:.1f}s" if att.attempt_duration else "\u2014"],
                     ["Error", _safe_str(att.error_summary)],
                 ]
                 elements.append(_kv_table(att_rows, [2 * inch, 6.5 * inch]))
