@@ -156,10 +156,13 @@ a:hover { text-decoration:underline; }
 .chart-area { position:relative; height:230px; border-left:1px solid #d1d5db; border-bottom:1px solid #d1d5db; overflow-x:auto; }
 .grid-line { position:absolute; left:0; right:0; border-top:1px dashed #e5e7eb; }
 .chart { position:absolute; left:0; right:0; bottom:0; display:flex; gap:22px; align-items:flex-end; padding:0 12px; min-width:max-content; }
-.group { min-width:180px; text-align:center; } .group-bars { display:flex; justify-content:center; gap:10px; align-items:flex-end; height:170px; }
-.mini { width:42px; display:block; text-decoration:none; color:inherit; } .mini-bar { width:100%; border-radius:6px 6px 0 0; display:flex; flex-direction:column-reverse; overflow:hidden; }
+.group { min-width:180px; text-align:center; } .group-bars { display:flex; justify-content:center; gap:10px; align-items:flex-end; height:230px; }
+.mini { width:42px; height:230px; display:block; position:relative; text-decoration:none; color:inherit; }
+.mini-txt { position:absolute; left:0; right:0; color:#4b5563; text-align:center; pointer-events:none; display:flex; flex-direction:column; align-items:center; line-height:1.15; white-space:nowrap; }
+.mini-size { font-weight:700; font-size:11px; }
+.mini-pct { font-size:10px; }
+.mini-bar { position:absolute; left:0; right:0; bottom:0; height:230px; border-radius:6px 6px 0 0; display:flex; flex-direction:column-reverse; overflow:hidden; }
 .seg { width:100%; }
-.mini-txt { font-size:10px; color:#4b5563; margin-top:4px; }
 .legend { margin:8px 0 14px; color:#4b5563; font-size:13px; display:flex; gap:14px; flex-wrap:wrap; }
 .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:middle; }
 .xlabels { display:flex; gap:22px; padding-left:12px; min-width:max-content; align-items:flex-start; }
@@ -189,23 +192,31 @@ def _stacked_bar_html(
     total_passed: int,
     total_found: int,
     total_height: int,
-    label: str,
+    size_letter: str,
+    pct_total: float,
 ) -> str:
     h1 = max(0, int((pass1_pct / 100.0) * total_height))
     h2 = max(0, int((pass2_pct / 100.0) * total_height))
     h3 = max(0, int((pass3_pct / 100.0) * total_height))
+    total_h = h1 + h2 + h3
     s1 = (pass1_count / total_passed * 100.0) if total_passed else 0.0
     s2 = (pass2_count / total_passed * 100.0) if total_passed else 0.0
     s3 = (pass3_count / total_passed * 100.0) if total_passed else 0.0
     t1 = f"pass@1: {s1:.1f}% of passed ({pass1_count}/{total_passed}), {pass1_pct:.1f}% of found ({pass1_count}/{total_found})"
     t2 = f"pass@2: {s2:.1f}% of passed ({pass2_count}/{total_passed}), {pass2_pct:.1f}% of found ({pass2_count}/{total_found})"
     t3 = f"pass@3: {s3:.1f}% of passed ({pass3_count}/{total_passed}), {pass3_pct:.1f}% of found ({pass3_count}/{total_found})"
+    sz = html.escape(size_letter.strip().upper()[:1] or "?")
+    pct_s = f"{pct_total:.1f}%"
     return (
+        f'<div class="mini-txt" style="bottom:{total_h + 4}px">'
+        f'<span class="mini-size">{sz}</span>'
+        f'<span class="mini-pct">{html.escape(pct_s)}</span>'
+        f"</div>"
         f'<div class="mini-bar">'
         f'<div class="seg" title="{html.escape(t1)}" style="height:{h1}px;background:#2aa65a"></div>'
         f'<div class="seg" title="{html.escape(t2)}" style="height:{h2}px;background:#66cdaa"></div>'
         f'<div class="seg" title="{html.escape(t3)}" style="height:{h3}px;background:#9be0d8"></div>'
-        f'</div><div class="mini-txt">{html.escape(label)}</div>'
+        f"</div>"
     )
 
 
@@ -235,8 +246,9 @@ def render_root(out_dir: Path, by_model_size: Dict[Tuple[str, str], List[RunStat
                 pass3_count=p3,
                 total_passed=(p1 + p2 + p3),
                 total_found=found,
-                total_height=170,
-                label=f"{size[0].upper()} {total_pct:.1f}%",
+                total_height=230,
+                size_letter=size[0],
+                pct_total=total_pct,
             )
             bars.append(f'<a class="mini" href="{_slug(m)}/{size}/index.html" title="{size} {total_pct:.1f}%">{bar_inner}</a>')
         groups.append(f'<div class="group"><div class="group-bars">{"".join(bars)}</div></div>')
@@ -250,7 +262,7 @@ def render_root(out_dir: Path, by_model_size: Dict[Tuple[str, str], List[RunStat
   <span><span class="swatch" style="background:#2aa65a"></span>pass@1</span>
   <span><span class="swatch" style="background:#66cdaa"></span>pass@2</span>
   <span><span class="swatch" style="background:#9be0d8"></span>pass@3</span>
-  <span>S/M/L labels appear under each bar</span>
+  <span>S/M/L labels appear above each bar</span>
 </div>
 <div class="chart-shell"><div class="y-axis"><div style="bottom:100%">100%</div><div style="bottom:75%">75%</div><div style="bottom:50%">50%</div><div style="bottom:25%">25%</div><div style="bottom:0%">0%</div></div>
 <div class="chart-stack"><div class="chart-area"><div class="grid-line" style="bottom:0%"></div><div class="grid-line" style="bottom:25%"></div><div class="grid-line" style="bottom:50%"></div><div class="grid-line" style="bottom:75%"></div><div class="grid-line" style="bottom:100%"></div><div class="chart">{"".join(groups)}</div></div><div class="xlabels">{"".join(labels)}</div></div></div>
@@ -293,8 +305,9 @@ def render_model_pages(out_dir: Path, runs: List[RunStats]) -> None:
                 pass3_count=p3,
                 total_passed=(p1 + p2 + p3),
                 total_found=found,
-                total_height=170,
-                label=f"{size[0].upper()} {pct:.1f}%",
+                total_height=230,
+                size_letter=size[0],
+                pct_total=pct,
             )
             bars.append(f'<div class="group"><div class="group-bars"><a class="mini" href="{size}/index.html" title="{size} {pct:.1f}%">{bar_inner}</a></div></div>')
             xlabels.append(
@@ -369,9 +382,15 @@ def render_size_page(size_dir: Path, model: str, size: str, runs: List[RunStats]
 
 def render_run_page(run_dir: Path, model: str, size: str, run_label: str, run_slug: str, r: RunStats) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
+    p1_pct = round((r.pass1 / r.found) * 100.0, 1) if r.found else 0.0
+    p2_pct = round((r.pass2 / r.found) * 100.0, 1) if r.found else 0.0
+    p3_pct = round((r.pass3 / r.found) * 100.0, 1) if r.found else 0.0
     counts = [
         ("Total Found", r.found, "#5b8def"),
-        ("Total Succeeded", r.succeeded, "#2aa65a"),
+        ("Pass@1", r.pass1, "#2aa65a"),
+        ("Pass@2", r.pass2, "#66cdaa"),
+        ("Pass@3", r.pass3, "#9be0d8"),
+        ("Total Succeeded", r.succeeded, "#15803d"),
         ("Total Failed", r.failed, "#d9534f"),
     ]
     maxv = max([v for _, v, _ in counts] + [1])
@@ -390,7 +409,14 @@ def render_run_page(run_dir: Path, model: str, size: str, run_label: str, run_sl
 <div><a href="../../../index.html">All Models</a> / <a href="../../index.html">{html.escape(model)}</a> / <a href="../index.html">{size.title()}</a> / {run_label}</div>
 <h1>{html.escape(model)} - {size.title()} - {run_label}</h1>
 <section class="card"><h2>{html.escape(r.system)}</h2>
-<div class="kpis"><div class="kpi"><div class="k">Remediation %</div><div class="v">{r.remediation_pct}%</div></div><div class="kpi"><div class="k">Total Found</div><div class="v">{r.found}</div></div><div class="kpi"><div class="k">Total Succeeded</div><div class="v">{r.succeeded}</div></div></div>
+<div class="kpis">
+<div class="kpi"><div class="k">Remediation %</div><div class="v">{r.remediation_pct}%</div></div>
+<div class="kpi"><div class="k">Total Found</div><div class="v">{r.found}</div></div>
+<div class="kpi"><div class="k">Total Succeeded</div><div class="v">{r.succeeded}</div></div>
+<div class="kpi"><div class="k">Pass@1 (of found)</div><div class="v">{p1_pct}%</div></div>
+<div class="kpi"><div class="k">Pass@2 (of found)</div><div class="v">{p2_pct}%</div></div>
+<div class="kpi"><div class="k">Pass@3 (of found)</div><div class="v">{p3_pct}%</div></div>
+</div>
 <h3>Outcome Counts</h3>{bars}
 <h3>Average Reasoning Time per LLM Step</h3>{tbars}
 </section></body></html>""",
