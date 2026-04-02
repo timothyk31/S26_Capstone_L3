@@ -39,6 +39,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -252,7 +253,7 @@ def load_vulnerabilities(
 
 def build_report_dir(base_dir: Path, model_name: str) -> Path:
     """Create and return a timestamped report subdirectory: <base>/<model>_<YYYYMMDD_HHMMSS>/."""
-    safe_name = model_name.replace("/", "_").replace("\\", "_")
+    safe_name = re.sub(r'[/\\:*?"<>|]', "_", model_name)
     run_ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     report_dir = base_dir / f"{safe_name}_{run_ts}"
     report_dir.mkdir(parents=True, exist_ok=True)
