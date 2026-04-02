@@ -435,6 +435,7 @@ class TriageAgent(BaseAgent):
         spec = MODELS_BY_MODE.get(mode, MODELS_BY_MODE["balanced"])
         env_model = os.getenv("OPENROUTER_MODEL") or os.getenv("TRIAGE_MODEL")
         chosen_model = model_override or env_model or spec.name
+        self.model = chosen_model
 
         system_prompt = None
         if lenient:
