@@ -146,6 +146,7 @@ class RemedyAgentV2:
             success=False,
         )
         attempt.llm_metrics = session_result.get("llm_metrics")
+        attempt.reasoning_messages = session_result.get("reasoning_messages", [])
         attempt.attempt_duration = time.time() - start
 
         # Save combined transcript (plan + review + apply — all in one file)
@@ -318,6 +319,7 @@ class RemedyAgentV2:
         final_message: str = ""
         usage_records: List[Dict[str, Any]] = []
         turn_records: List[Dict[str, Any]] = []
+        reasoning_messages: List[Dict[str, Any]] = []
 
         pre_approval_result: Optional[PreApprovalResult] = None
 
@@ -361,6 +363,11 @@ class RemedyAgentV2:
             )
             if reasoning:
                 assistant_entry["reasoning"] = reasoning
+                reasoning_messages.append({
+                    "turn": total_turns,
+                    "reasoning": reasoning,
+                    "content": msg.get("content"),
+                })
             assistant_entry["_raw_message"] = dict(msg)
             transcript.append(assistant_entry)
             messages.append(msg)
@@ -516,6 +523,7 @@ class RemedyAgentV2:
             "final_message": final_message,
             "usage": usage_records,
             "pre_approval_result": pre_approval_result,
+            "reasoning_messages": reasoning_messages,
             "llm_metrics": {
                 "total_llm_api_seconds": round(
                     sum(r["api_seconds"] for r in turn_records), 3

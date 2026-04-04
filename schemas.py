@@ -119,6 +119,10 @@ class RemediationAttempt(BaseModel):
     error_summary: Optional[str] = None
     llm_verdict: Optional[ToolVerdict] = None
     llm_metrics: Optional[Dict[str, Any]] = None
+    reasoning_messages: List[Dict[str, Any]] = Field(
+        default_factory=list,
+        description="LLM reasoning/thinking content from each turn",
+    )
 
 
 # Review Agent
