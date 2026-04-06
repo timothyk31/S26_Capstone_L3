@@ -17,6 +17,7 @@ from typing import Optional
 
 from rich.console import Console
 
+from worker_display import worker_print
 from agents.qa_agent_v2 import QAAgentV2
 from agents.review_agent import ReviewAgent
 from schemas import (
@@ -52,11 +53,11 @@ class ReviewAgentV2:
         vid = review_input.vulnerability.id
 
         # ── Step 1: Review ────────────────────────────────────────────
-        console.print(f"[bold cyan]  [{vid}] V2 Review: evaluating fix quality[/bold cyan]")
+        worker_print(f"[bold cyan]  [{vid}] V2 Review: evaluating fix quality[/bold cyan]")
         try:
             review_verdict: ReviewVerdict = self.review_agent.process(review_input, attempt=attempt)
         except Exception as exc:
-            console.print(f"[red]  [{vid}] Review error: {exc}[/red]")
+            worker_print(f"[red]  [{vid}] Review error: {exc}[/red]")
             review_verdict = ReviewVerdict(
                 finding_id=vid,
                 is_optimal=False,
@@ -66,7 +67,7 @@ class ReviewAgentV2:
             )
 
         if not review_verdict.approve:
-            console.print(
+            worker_print(
                 f"[yellow]  [{vid}] V2 Review → REJECTED: "
                 f"{review_verdict.feedback or 'no feedback'}[/yellow]"
             )
@@ -77,13 +78,13 @@ class ReviewAgentV2:
                 rejection_reason=review_verdict.feedback or "Review rejected the fix",
             )
 
-        console.print(
+        worker_print(
             f"[green]  [{vid}] V2 Review → APPROVED "
             f"(score={review_verdict.security_score})[/green]"
         )
 
         # ── Step 2: QA ────────────────────────────────────────────────
-        console.print(f"[bold cyan]  [{vid}] V2 QA: expert safety opinion[/bold cyan]")
+        worker_print(f"[bold cyan]  [{vid}] V2 QA: expert safety opinion[/bold cyan]")
         qa_result: Optional[QAResult] = None
         try:
             qa_input = QAInput(
@@ -93,7 +94,7 @@ class ReviewAgentV2:
             )
             qa_result = self.qa_agent.process(qa_input, attempt=attempt)
         except Exception as exc:
-            console.print(f"[red]  [{vid}] QA error: {exc}[/red]")
+            worker_print(f"[red]  [{vid}] QA error: {exc}[/red]")
             # QA error → treat as unsafe
             return PreApprovalResult(
                 review_verdict=review_verdict,
@@ -103,7 +104,7 @@ class ReviewAgentV2:
             )
 
         if not qa_result.safe:
-            console.print(
+            worker_print(
                 f"[yellow]  [{vid}] V2 QA → UNSAFE: "
                 f"{qa_result.verdict_reason}[/yellow]"
             )
@@ -114,7 +115,7 @@ class ReviewAgentV2:
                 rejection_reason=qa_result.verdict_reason,
             )
 
-        console.print(
+        worker_print(
             f"[green]  [{vid}] V2 QA → SAFE "
             f"(recommendation={qa_result.recommendation})[/green]"
         )

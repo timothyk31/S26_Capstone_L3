@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 
+from worker_display import worker_print
 from agents.remedy_agent import RemedyAgent
 from agents.review_agent_v2 import ReviewAgentV2
 from schemas import (
@@ -78,7 +79,7 @@ class RemedyAgentV2:
         vid = vuln.id
         start = time.time()
 
-        console.print(
+        worker_print(
             f"[bold cyan]  [{vid}] V2 Remedy: starting single-session "
             f"plan→review→apply (attempt {input_data.attempt_number})[/bold cyan]"
         )
@@ -121,7 +122,7 @@ class RemedyAgentV2:
                 attempt_number=input_data.attempt_number,
             )
         except Exception as exc:
-            console.print(f"[red]  [{vid}] V2 session error: {exc}[/red]")
+            worker_print(f"[red]  [{vid}] V2 session error: {exc}[/red]")
             return (
                 RemediationAttempt(
                     finding_id=vid,
@@ -401,7 +402,7 @@ class RemedyAgentV2:
 
                 if name == "review_plan":
                     plan_description = (args.get("plan_description") or "").strip()
-                    console.print(
+                    worker_print(
                         f"[bold cyan]  [{vuln.id}] review_plan called — "
                         f"invoking Review+QA[/bold cyan]"
                     )
@@ -418,7 +419,7 @@ class RemedyAgentV2:
                         consecutive_review_rejections += 1
                         if consecutive_review_rejections >= self._MAX_REVIEW_REJECTIONS:
                             review_plan_capped = True
-                            console.print(
+                            worker_print(
                                 f"[yellow]  [{vuln.id}] review_plan cap reached "
                                 f"({consecutive_review_rejections} consecutive "
                                 f"rejections) — ending attempt[/yellow]"

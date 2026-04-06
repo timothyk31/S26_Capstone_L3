@@ -84,6 +84,7 @@ from schemas import (
     V2FindingResult,
     Vulnerability,
 )
+from worker_display import worker_display, worker_print
 from workflow.pipeline_v2 import PipelineV2
 
 load_dotenv(find_dotenv(), override=False)
@@ -743,16 +744,6 @@ def main() -> int:
         )
         return updated_, is_fixed_, scan_dur_
 
-    def _make_progress() -> Progress:
-        return Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            console=console,
-        )
-
     # ────────────────────────────────────────────────────────────────
     # Phase A: Build dependency groups
     # ────────────────────────────────────────────────────────────────
@@ -773,8 +764,7 @@ def main() -> int:
         f"up to {max_rounds} attempts each) ──[/bold cyan]\n"
     )
 
-    # Thread-safe progress + result collection
-    progress_lock = threading.Lock()
+    # Thread-safe result collection
     results_lock = threading.Lock()
     all_group_results: List[V2FindingResult] = []
     fixed_at_round: Dict[int, List[str]] = {}
@@ -783,10 +773,9 @@ def main() -> int:
         group_name: str,
         group_vulns: List[Vulnerability],
         pip: PipelineV2,
-        progress_bar: Progress,
-        progress_task,
     ) -> None:
         """Process all findings in one dependency group serially."""
+        worker_display.set_worker(group_name)
         tag = f"[dim]\\[{group_name}][/dim] "
         for vuln in group_vulns:
             attempts: List[RemediationAttempt] = []
@@ -807,7 +796,7 @@ def main() -> int:
                         group_label=group_name,
                     )
                 except Exception as exc:
-                    console.print(f"{tag}[red]Pipeline error for {vuln.id}: {exc}[/red]")
+                    worker_print(f"{tag}[red]Pipeline error for {vuln.id}: {exc}[/red]")
                     result = V2FindingResult(
                         vulnerability=vuln,
                         triage=triage_decision or TriageDecision(
@@ -841,7 +830,7 @@ def main() -> int:
                         result = result.model_copy(update={"final_status": "failed"})
                         attempts.append(result.remediation)
                         reason = result.pre_approval.rejection_reason or "review/QA rejected"
-                        console.print(
+                        worker_print(
                             f"{tag}  [{vuln.id}] attempt {attempt_num} "
                             f"review/QA rejected — skipping scan ({reason})"
                         )
@@ -860,7 +849,7 @@ def main() -> int:
 
                     rule_label = vuln.rule or vuln.id
                     status_label = "PASS" if is_fixed else "FAIL"
-                    console.print(
+                    worker_print(
                         f"{tag}  [{vuln.id}] ({rule_label}) attempt {attempt_num} "
                         f"scan -> {status_label} ({scan_dur:.1f}s)"
                     )
@@ -883,13 +872,15 @@ def main() -> int:
 
             with results_lock:
                 all_group_results.append(result)
-            with progress_lock:
-                progress_bar.advance(progress_task)
+            worker_display.advance(group_name)
 
-    # Launch groups in parallel
-    with _make_progress() as progress:
-        ptask = progress.add_task("Processing findings", total=total)
+    # Launch groups in parallel with split-terminal display
+    # Build worker names and totals for the display
+    display_workers = list(groups.keys())
+    display_totals = {gname: len(gvulns) for gname, gvulns in groups.items()}
 
+    worker_display.start(worker_names=display_workers, totals=display_totals)
+    try:
         max_workers = min(len(groups), args.max_parallel_groups)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {}
@@ -899,7 +890,7 @@ def main() -> int:
                     transcript_dir, agent_report_dir, run_id,
                 )
                 fut = pool.submit(
-                    _process_group, gname, gvulns, pip, progress, ptask,
+                    _process_group, gname, gvulns, pip,
                 )
                 futures[fut] = gname
 
@@ -908,7 +899,9 @@ def main() -> int:
                 try:
                     fut.result()  # raises if _process_group raised
                 except Exception as exc:
-                    console.print(f"[dim]\\[{gname}][/dim] [red]Group failed: {exc}[/red]")
+                    worker_print(f"[red]Group {gname} failed: {exc}[/red]")
+    finally:
+        worker_display.stop()
 
     # Combine and re-sort results to original finding order
     results: List[V2FindingResult] = list(all_group_results)

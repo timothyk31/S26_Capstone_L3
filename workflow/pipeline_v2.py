@@ -19,6 +19,7 @@ from typing import List, Optional, Union
 
 from rich.console import Console
 
+from worker_display import worker_print
 from agents.triage_agent import TriageAgent
 from agents.remedy_agent_v2 import RemedyAgentV2
 from helpers.agent_report_writer import AgentReportWriter
@@ -103,14 +104,14 @@ class PipelineV2:
 
         # ── Stage 1: Triage ───────────────────────────────────────────
         if triage_decision is None:
-            console.print(f"{tag}[bold cyan]  [{vid}] Stage 1/2: Triage[/bold cyan]")
+            worker_print(f"{tag}[bold cyan]  [{vid}] Stage 1/2: Triage[/bold cyan]")
             triage_input = TriageInput(vulnerability=vulnerability)
             try:
                 triage_decision = self.triage.process(triage_input)
                 if self._writer:
                     self._writer.write("triage", vid, triage_input, triage_decision)
             except Exception as exc:
-                console.print(f"{tag}[red]  [{vid}] Triage error: {exc}[/red]")
+                worker_print(f"{tag}[red]  [{vid}] Triage error: {exc}[/red]")
                 triage_decision = TriageDecision(
                     finding_id=vid,
                     should_remediate=False,
@@ -127,7 +128,7 @@ class PipelineV2:
                 if triage_decision.requires_human_review
                 else "discarded"
             )
-            console.print(f"{tag}[yellow]  [{vid}] Triage → {status}[/yellow]")
+            worker_print(f"{tag}[yellow]  [{vid}] Triage → {status}[/yellow]")
             return V2FindingResult(
                 vulnerability=vulnerability,
                 triage=triage_decision,
@@ -138,7 +139,7 @@ class PipelineV2:
             )
 
         # ── Stage 2: Single remedy attempt (no scan) ─────────────────
-        console.print(
+        worker_print(
             f"{tag}[bold cyan]  [{vid}] Stage 2/2: Remedy+Approval "
             f"(attempt {attempt_number})[/bold cyan]"
         )
@@ -162,10 +163,10 @@ class PipelineV2:
                     "remedy_v2", vid, remedy_input, dump, attempt=attempt_number,
                 )
             except Exception as exc:
-                console.print(f"{tag}[red]  [{vid}] Report write error: {exc}[/red]")
+                worker_print(f"{tag}[red]  [{vid}] Report write error: {exc}[/red]")
 
         elapsed = time.time() - t0
-        console.print(
+        worker_print(
             f"{tag}[bold]  [{vid}] V2 Pipeline attempt {attempt_number} complete "
             f"({elapsed:.1f}s)[/bold]"
         )
