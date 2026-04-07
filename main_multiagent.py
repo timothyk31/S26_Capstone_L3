@@ -775,7 +775,7 @@ def main() -> int:
         pip: PipelineV2,
     ) -> None:
         """Process all findings in one dependency group serially."""
-        worker_display.set_worker(group_name)
+        worker_display.assign_worker(group_name, num_findings=len(group_vulns))
         tag = f"[dim]\\[{group_name}][/dim] "
         for vuln in group_vulns:
             attempts: List[RemediationAttempt] = []
@@ -872,16 +872,12 @@ def main() -> int:
 
             with results_lock:
                 all_group_results.append(result)
-            worker_display.advance(group_name)
+            worker_display.advance()
 
     # Launch groups in parallel with split-terminal display
-    # Build worker names and totals for the display
-    display_workers = list(groups.keys())
-    display_totals = {gname: len(gvulns) for gname, gvulns in groups.items()}
-
-    worker_display.start(worker_names=display_workers, totals=display_totals)
+    max_workers = min(len(groups), args.max_parallel_groups)
+    worker_display.start(num_workers=max_workers, total_findings=total)
     try:
-        max_workers = min(len(groups), args.max_parallel_groups)
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {}
             for gname, gvulns in groups.items():

@@ -1,18 +1,18 @@
 """
 WorkerDisplay — Split-terminal view for concurrent pipeline workers.
 
-Uses Rich's Live + Layout to show one panel per worker, each with its
-own scrolling log.  A bottom panel shows overall progress.
+Uses Rich's Live + Layout to show one panel per worker thread, each with
+its own scrolling log.  A bottom panel shows overall progress.
 
 Usage:
     from worker_display import worker_display, worker_print
 
     # At the start of main, before launching workers:
-    worker_display.start(worker_names=["pam", "sysctl", "mount", "misc"])
+    worker_display.start(num_workers=4, total_findings=59)
 
-    # Inside each worker thread:
-    worker_display.set_worker("pam")
-    worker_print("[green]doing stuff[/green]")  # routes to the "pam" panel
+    # Inside each worker thread (called automatically via assign_worker):
+    wid = worker_display.assign_worker("pam")   # gets "Worker 1", etc.
+    worker_print("[green]doing stuff[/green]")   # routes to that panel
 
     # When done:
     worker_display.stop()
@@ -20,56 +20,73 @@ Usage:
 
 from __future__ import annotations
 
+import re
 import threading
 from collections import deque
 from typing import Deque, Dict, List, Optional
 
-from rich.console import Console
+from rich.console import Console, Group
 from rich.layout import Layout
 from rich.live import Live
 from rich.panel import Panel
+from rich.progress import BarColumn, MofNCompleteColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.text import Text
 
 
 _thread_local = threading.local()
 
 # Max log lines to keep per worker panel
-_MAX_LINES = 50
+_MAX_LINES = 200
 
 # Module-level fallback console for non-worker contexts
 _fallback_console = Console()
 
 
 class WorkerDisplay:
-    """Manage a split-terminal Live display with per-worker panels."""
+    """Manage a split-terminal Live display with per-worker-thread panels."""
 
     def __init__(self) -> None:
-        self._worker_names: List[str] = []
+        self._num_workers: int = 0
+        self._worker_ids: List[str] = []          # ["Worker 1", "Worker 2", ...]
         self._logs: Dict[str, Deque[str]] = {}
+        self._group_labels: Dict[str, str] = {}   # worker_id -> current group name
         self._progress_text: str = ""
         self._lock = threading.Lock()
         self._live: Optional[Live] = None
         self._layout: Optional[Layout] = None
         self._active = False
-        self._completed: Dict[str, int] = {}
-        self._totals: Dict[str, int] = {}
+        self._total_completed: int = 0
+        self._total_findings: int = 0
+        # Per-worker progress
+        self._worker_completed: Dict[str, int] = {}
+        self._worker_total: Dict[str, int] = {}
+        # Thread-to-worker assignment
+        self._next_worker_idx: int = 0
+        self._thread_worker_map: Dict[int, str] = {}   # thread_id -> worker_id
 
     # ── Public API ───────────────────────────────────────────────────
 
-    def start(self, worker_names: List[str], totals: Optional[Dict[str, int]] = None) -> None:
-        """Start the live display with panels for each worker."""
-        self._worker_names = list(worker_names)
-        self._logs = {name: deque(maxlen=_MAX_LINES) for name in worker_names}
-        self._completed = {name: 0 for name in worker_names}
-        self._totals = totals or {name: 0 for name in worker_names}
+    def start(self, num_workers: int, total_findings: int = 0) -> None:
+        """Start the live display with N worker panels in a single row."""
+        self._num_workers = num_workers
+        self._worker_ids = [f"Worker {i + 1}" for i in range(num_workers)]
+        self._logs = {wid: deque(maxlen=_MAX_LINES) for wid in self._worker_ids}
+        self._group_labels = {wid: "" for wid in self._worker_ids}
+        self._total_completed = 0
+        self._total_findings = total_findings
+        self._worker_completed = {wid: 0 for wid in self._worker_ids}
+        self._worker_total = {wid: 0 for wid in self._worker_ids}
+        self._next_worker_idx = 0
+        self._thread_worker_map = {}
         self._active = True
 
         self._layout = self._build_layout()
+        self._console = Console()
         self._live = Live(
             self._layout,
-            console=_fallback_console,
+            console=self._console,
             refresh_per_second=4,
-            screen=False,
+            screen=True,
         )
         self._live.start()
 
@@ -79,13 +96,39 @@ class WorkerDisplay:
             self._live.stop()
         self._active = False
 
-    def set_worker(self, name: str) -> None:
-        """Set the current thread's worker identity."""
-        _thread_local.worker_name = name
+    def assign_worker(self, group_name: str, num_findings: int = 0) -> str:
+        """Assign the current thread to a worker slot and set its group label.
+
+        Called at the start of _process_group.  The same thread keeps the
+        same worker slot even if it processes multiple groups sequentially.
+        *num_findings* is added to that worker's total for progress tracking.
+        Returns the worker ID (e.g. "Worker 1").
+        """
+        tid = threading.get_ident()
+        with self._lock:
+            if tid not in self._thread_worker_map:
+                wid = self._worker_ids[self._next_worker_idx % self._num_workers]
+                self._next_worker_idx += 1
+                self._thread_worker_map[tid] = wid
+            else:
+                wid = self._thread_worker_map[tid]
+            self._group_labels[wid] = group_name
+            self._worker_total[wid] += num_findings
+            self._refresh()
+        _thread_local.worker_id = wid
+        return wid
+
+    def update_group(self, group_name: str) -> None:
+        """Update the current worker's group label (when it moves to a new group)."""
+        wid = getattr(_thread_local, "worker_id", None)
+        if wid:
+            with self._lock:
+                self._group_labels[wid] = group_name
+                self._refresh()
 
     def get_worker(self) -> Optional[str]:
-        """Get the current thread's worker name."""
-        return getattr(_thread_local, "worker_name", None)
+        """Get the current thread's worker ID."""
+        return getattr(_thread_local, "worker_id", None)
 
     def log(self, message: str, worker: Optional[str] = None) -> None:
         """Append a message to a worker's log panel.
@@ -97,25 +140,26 @@ class WorkerDisplay:
             _fallback_console.print(message)
             return
 
-        wname = worker or self.get_worker()
-        if wname is None or wname not in self._logs:
+        wid = worker or self.get_worker()
+        if wid is None or wid not in self._logs:
             _fallback_console.print(message)
             return
 
-        # Strip the group tag prefix since the panel header already identifies the worker
-        clean = self._strip_group_tag(message, wname)
+        # Strip the group tag prefix since the panel header already shows it
+        clean = self._strip_group_tag(message)
 
         with self._lock:
-            self._logs[wname].append(clean)
+            self._logs[wid].append(clean)
             self._refresh()
 
-    def advance(self, worker: Optional[str] = None) -> None:
-        """Mark one more finding as completed for a worker."""
-        wname = worker or self.get_worker()
-        if wname and wname in self._completed:
-            with self._lock:
-                self._completed[wname] += 1
-                self._refresh()
+    def advance(self) -> None:
+        """Mark one more finding as completed for the current worker and overall."""
+        wid = self.get_worker()
+        with self._lock:
+            self._total_completed += 1
+            if wid and wid in self._worker_completed:
+                self._worker_completed[wid] += 1
+            self._refresh()
 
     def set_progress_text(self, text: str) -> None:
         """Update the bottom progress text."""
@@ -125,58 +169,22 @@ class WorkerDisplay:
 
     # ── Internal ─────────────────────────────────────────────────────
 
-    def _strip_group_tag(self, msg: str, worker_name: str) -> str:
-        """Remove the [group_name] dim tag prefix since panels already show worker name."""
-        # The tag looks like: [dim]\[group_name][/dim]
-        import re
-        pattern = r'\[dim\]\\?\[' + re.escape(worker_name) + r'\]\[/dim\]\s*'
-        return re.sub(pattern, '', msg)
+    def _strip_group_tag(self, msg: str) -> str:
+        """Remove the [dim]\\[group_name][/dim] prefix — panel title shows the group."""
+        return re.sub(r'\[dim\]\\?\[[^\]]*\]\[/dim\]\s*', '', msg)
 
     def _build_layout(self) -> Layout:
-        """Build a layout with worker panels arranged in a grid."""
+        """Build a layout with worker panels in a single row (N columns x 1 row)."""
         layout = Layout()
 
-        n = len(self._worker_names)
-        if n == 0:
+        if self._num_workers == 0:
             return layout
 
-        # Create worker panels
-        # Arrange in rows of 2 for 2+ workers
-        if n == 1:
-            worker_layout = Layout(name=self._worker_names[0])
-        elif n == 2:
-            worker_layout = Layout()
-            worker_layout.split_row(
-                Layout(name=self._worker_names[0]),
-                Layout(name=self._worker_names[1]),
-            )
-        elif n <= 4:
-            worker_layout = Layout()
-            top_row = Layout()
-            top_names = self._worker_names[:2]
-            top_row.split_row(*[Layout(name=w) for w in top_names])
-
-            bot_names = self._worker_names[2:]
-            if len(bot_names) == 1:
-                bot_row = Layout(name=bot_names[0])
-            else:
-                bot_row = Layout()
-                bot_row.split_row(*[Layout(name=w) for w in bot_names])
-
-            worker_layout.split_column(top_row, bot_row)
-        else:
-            # More than 4: stack rows of 2
-            rows = []
-            for i in range(0, n, 2):
-                chunk = self._worker_names[i:i + 2]
-                if len(chunk) == 1:
-                    rows.append(Layout(name=chunk[0]))
-                else:
-                    row = Layout()
-                    row.split_row(*[Layout(name=w) for w in chunk])
-                    rows.append(row)
-            worker_layout = Layout()
-            worker_layout.split_column(*rows)
+        # All workers side-by-side in one row
+        worker_layout = Layout()
+        worker_layout.split_row(
+            *[Layout(name=wid) for wid in self._worker_ids]
+        )
 
         # Add a small progress footer
         layout.split_column(
@@ -193,36 +201,49 @@ class WorkerDisplay:
         if not self._layout:
             return
 
-        for wname in self._worker_names:
-            lines = list(self._logs.get(wname, []))
-            completed = self._completed.get(wname, 0)
-            total = self._totals.get(wname, 0)
+        for wid in self._worker_ids:
+            lines = list(self._logs.get(wid, []))
+            group = self._group_labels.get(wid, "")
+            completed = self._worker_completed.get(wid, 0)
+            total = self._worker_total.get(wid, 0)
 
-            # Build panel content from log lines
+            # Per-worker progress bar
+            parts: list = []
+            if total > 0:
+                bar_width = 20
+                filled = int(bar_width * completed / total) if total else 0
+                bar = "━" * filled + "╺" + "─" * (bar_width - filled - 1) if filled < bar_width else "━" * bar_width
+                parts.append(Text.from_markup(
+                    f"[green]{bar}[/green]  {completed}/{total}  "
+                ))
+
+            # Log lines — show all, no truncation
             if lines:
-                # Show last lines that fit
-                display_lines = lines[-20:]
-                content = Text.from_markup("\n".join(display_lines))
-            else:
-                content = Text("Waiting...", style="dim")
+                parts.append(Text.from_markup("\n".join(lines)))
+            elif not total:
+                parts.append(Text("Waiting...", style="dim"))
 
-            progress_str = f" [{completed}/{total}]" if total > 0 else ""
+            content = Group(*parts) if len(parts) > 1 else (parts[0] if parts else Text("Waiting...", style="dim"))
+
+            subtitle = f"[dim]{group}[/dim]" if group else ""
             panel = Panel(
                 content,
-                title=f"[bold]{wname}{progress_str}[/bold]",
+                title=f"[bold]{wid}[/bold]",
+                subtitle=subtitle,
                 border_style="cyan",
                 height=None,
             )
 
             try:
-                self._layout[wname].update(panel)
+                self._layout[wid].update(panel)
             except KeyError:
                 pass
 
         # Progress footer
-        total_done = sum(self._completed.values())
-        total_all = sum(self._totals.values())
-        progress_msg = self._progress_text or f"Overall: {total_done}/{total_all} findings processed"
+        progress_msg = (
+            self._progress_text
+            or f"Overall: {self._total_completed}/{self._total_findings} findings processed"
+        )
         try:
             self._layout["progress"].update(
                 Panel(Text(progress_msg), border_style="green", title="Progress")
