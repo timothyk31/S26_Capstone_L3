@@ -106,15 +106,25 @@ DEFAULT_REPORT_DIR = "./reports"
 # ── Dependency grouping ───────────────────────────────────────────────────
 
 def classify_finding_group(vuln: Vulnerability) -> str:
-    """Map a vulnerability to a dependency group based on rule name patterns.
+    """Map a vulnerability to a dependency group.
 
-    Findings in the same group touch shared system resources and must run
-    serially.  Different groups are independent and can run in parallel.
+    Uses the XCCDF benchmark group from the scan report when available
+    (e.g. "Verify Integrity with AIDE", "Federal Information Processing
+    Standard (FIPS)").  These groups come from the XML and match the
+    categories shown in the HTML report — findings in the same category
+    typically touch the same subsystem and should run serially.
+
+    Falls back to rule-name heuristics when the group field is missing
+    (e.g. when using an older parsed JSON without group info).
     """
+    # ── Prefer the XCCDF group from the scan report ──────────────
+    if vuln.group:
+        return vuln.group
+
+    # ── Fallback: rule-name heuristics ───────────────────────────
     rule = vuln.rule or vuln.oval_id or vuln.id or ""
     rule = rule.replace("xccdf_org.ssgproject.content_rule_", "")
 
-    # PAM / password — all touch /etc/pam.d/ and /etc/security/
     if rule.startswith((
         "accounts_password_pam_", "accounts_passwords_pam_faillock_",
         "account_password_pam_", "no_empty_passwords",
@@ -124,19 +134,14 @@ def classify_finding_group(vuln: Vulnerability) -> str:
         return "sysctl"
     if rule.startswith("mount_option_"):
         return "mount"
-    if rule.startswith("banner_"):
-        return "banner"
-    if rule.startswith("chronyd_") or rule.startswith("chronyd_or_ntpd"):
-        return "chronyd"
-    # File permissions / ownership — each targets a different file, safe to parallelize
-    if rule.startswith(("file_permissions_", "file_owner_", "file_groupowner_",
-                        "file_permission_")):
-        return f"file__{rule}"
-    # Services and packages — each is independent
-    if rule.startswith("service_") or rule.startswith("package_"):
-        return f"svc_pkg__{rule}"
-    # Default catch-all — runs serially for safety
-    return "misc_serial"
+    if rule.startswith(("audit_rules_", "auditd_")):
+        return "audit"
+    if rule.startswith("selinux_"):
+        return "selinux"
+    if rule.startswith(("grub2_", "bootloader_")):
+        return "grub"
+    # Each unrecognized finding gets its own group
+    return f"independent__{rule}"
 
 
 def build_dependency_groups(
@@ -148,6 +153,7 @@ def build_dependency_groups(
         g = classify_finding_group(v)
         groups.setdefault(g, []).append(v)
     return groups
+
 
 
 # ── Inventory loader ───────────────────────────────────────────────────────
@@ -242,6 +248,7 @@ def load_vulnerabilities(
                     oval_id=entry.get("oval_id"),
                     scan_class=entry.get("class"),
                     os=entry.get("os"),
+                    group=entry.get("group"),
                 )
             )
         except (ValidationError, KeyError) as exc:
@@ -598,6 +605,7 @@ def main() -> int:
                     result=entry.get("result"), rule=entry.get("rule"),
                     oval_id=entry.get("oval_id"),
                     scan_class=entry.get("class"), os=entry.get("os"),
+                    group=entry.get("group"),
                 ))
             except (ValidationError, KeyError):
                 continue
@@ -874,7 +882,7 @@ def main() -> int:
                 all_group_results.append(result)
             worker_display.advance()
 
-    # Launch groups in parallel with split-terminal display
+    # Launch groups in parallel — ThreadPoolExecutor naturally balances work
     max_workers = min(len(groups), args.max_parallel_groups)
     worker_display.start(num_workers=max_workers, total_findings=total)
     try:
@@ -893,7 +901,7 @@ def main() -> int:
             for fut in as_completed(futures):
                 gname = futures[fut]
                 try:
-                    fut.result()  # raises if _process_group raised
+                    fut.result()
                 except Exception as exc:
                     worker_print(f"[red]Group {gname} failed: {exc}[/red]")
     finally:

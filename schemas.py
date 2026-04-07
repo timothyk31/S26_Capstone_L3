@@ -17,6 +17,7 @@ class Vulnerability(BaseModel):
     oval_id: Optional[str] = Field(default=None, description="Full XCCDF rule ID / OVAL reference")
     scan_class: Optional[str] = Field(default=None, description="Finding class (e.g., compliance)")
     os: Optional[str] = Field(default=None, description="Target OS detected during scan")
+    group: Optional[str] = Field(default=None, description="XCCDF benchmark group/category (e.g., 'Verify Integrity with AIDE')")
 
 class RemediationSuggestion(BaseModel):
     id: str

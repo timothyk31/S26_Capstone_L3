@@ -20,9 +20,12 @@ Usage:
 
 from __future__ import annotations
 
+import io
 import re
 import threading
 from collections import deque
+from datetime import datetime
+from pathlib import Path
 from typing import Deque, Dict, List, Optional
 
 from rich.console import Console, Group
@@ -63,10 +66,18 @@ class WorkerDisplay:
         # Thread-to-worker assignment
         self._next_worker_idx: int = 0
         self._thread_worker_map: Dict[int, str] = {}   # thread_id -> worker_id
+        # Log file
+        self._log_file: Optional[io.TextIOWrapper] = None
+        self._log_path: Optional[Path] = None
 
     # ── Public API ───────────────────────────────────────────────────
 
-    def start(self, num_workers: int, total_findings: int = 0) -> None:
+    def start(
+        self,
+        num_workers: int,
+        total_findings: int = 0,
+        log_dir: str = "pipeline_work",
+    ) -> None:
         """Start the live display with N worker panels in a single row."""
         self._num_workers = num_workers
         self._worker_ids = [f"Worker {i + 1}" for i in range(num_workers)]
@@ -80,6 +91,13 @@ class WorkerDisplay:
         self._thread_worker_map = {}
         self._active = True
 
+        # Open a log file so all worker output is preserved after the run
+        log_path = Path(log_dir)
+        log_path.mkdir(parents=True, exist_ok=True)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._log_path = log_path / f"worker_log_{ts}.txt"
+        self._log_file = open(self._log_path, "w", encoding="utf-8")
+
         self._layout = self._build_layout()
         self._console = Console()
         self._live = Live(
@@ -91,10 +109,15 @@ class WorkerDisplay:
         self._live.start()
 
     def stop(self) -> None:
-        """Stop the live display."""
+        """Stop the live display and close the log file."""
         if self._live:
             self._live.stop()
         self._active = False
+        if self._log_file:
+            self._log_file.close()
+            self._log_file = None
+        if self._log_path:
+            _fallback_console.print(f"[green]Worker log: {self._log_path}[/green]")
 
     def assign_worker(self, group_name: str, num_findings: int = 0) -> str:
         """Assign the current thread to a worker slot and set its group label.
@@ -150,6 +173,12 @@ class WorkerDisplay:
 
         with self._lock:
             self._logs[wid].append(clean)
+            # Write to log file with timestamp and worker ID (plain text, no markup)
+            if self._log_file:
+                ts = datetime.now().strftime("%H:%M:%S")
+                plain = re.sub(r'\[/?[^\]]*\]', '', clean)
+                self._log_file.write(f"[{ts}] {wid} | {plain}\n")
+                self._log_file.flush()
             self._refresh()
 
     def advance(self) -> None:
