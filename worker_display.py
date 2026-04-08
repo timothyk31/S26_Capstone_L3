@@ -246,9 +246,17 @@ class WorkerDisplay:
                     f"[green]{bar}[/green]  {completed}/{total}  "
                 ))
 
-            # Log lines — show all, no truncation
+            # Log lines — only show the most recent lines that fit the panel
             if lines:
-                parts.append(Text.from_markup("\n".join(lines)))
+                try:
+                    import shutil
+                    term_h = shutil.get_terminal_size().lines
+                except Exception:
+                    term_h = 40
+                # Reserve lines for: panel border (2), progress bar (1), progress footer (3)
+                max_visible = max(term_h - 6, 5)
+                visible_lines = lines[-max_visible:]
+                parts.append(Text.from_markup("\n".join(visible_lines)))
             elif not total:
                 parts.append(Text("Waiting...", style="dim"))
 
