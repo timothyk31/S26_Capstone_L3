@@ -627,6 +627,8 @@ def main() -> int:
         "sshd_disable_root_login",                  # Disable SSH Root Login
         "sshd_disable_x11_forwarding",              # Disable X11 Forwarding
         "sshd_enable_warning_banner",               # Enable SSH Warning Banner
+        # Password aging — can immediately expire root password and lock out SSH
+        "accounts_password_set_max_life_existing",  # chage -M on root with empty lastchg expires password instantly
         # Sudo/sudoers-related findings - remediation can break privileged access
         "selinux_context_elevation_for_sudo",       # Writes sudoers.d SELinux context rules
         "sudoers_validate_passwd",                  # Tightens sudoers Defaults policy
