@@ -1,0 +1,93 @@
+{
+  "vulnerability": {
+    "id": "accounts_passwords_pam_faillock_dir",
+    "title": "Lock Accounts Must Persist",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "This rule ensures that the system lock out accounts using pam_faillock.so persist after system reboot. From \"pam_faillock\" man pages: Note that the default directory that \"pam_faillock\" uses is usually cleared on system boot so the access will be re-enabled after system reboot. If that is undesirable, a different tally directory must be set with the \"dir\" option. pam_faillock.so module requires multiple entries in pam files. These entries must be carefully defined to work as expected. In order to avoid errors when manually editing these files, it is recommended to use the appropriate tools, such as authselect or authconfig, depending on the OS version. The chosen profile expects the directory to be . To configure the tally directory, add the following line to /etc/security/faillock.conf: dir =",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core && { rpm --quiet -q pam; }; then var_accounts_passwords_pam_faillock_dir='' if [ -f /usr/bin/authselect ]; then if ! authselect check; then echo \" authselect integrity check failed. Remediation aborted! This remediation could not be applied because an authselect profile was not selected or the selected profile is not intact. It is not recommended to manually edit the PAM files when authselect tool is available. In cases where the default authselect profile does not cover a specific demand, a custom authselect profile is recommended.\" exit 1 fi authselect enable-feature with-faillock authselect apply-changes -b else AUTH_FILES=(\"/etc/pam.d/system-auth\" \"/etc/pam.d/password-auth\") for pam_file in \"${AUTH_FILE",
+    "result": "fail",
+    "rule": "accounts_passwords_pam_faillock_dir",
+    "oval_id": "xccdf_org.ssgproject.content_rule_accounts_passwords_pam_faillock_dir",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "accounts_passwords_pam_faillock_dir",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The remediation only modifies PAM configuration (authselect or PAM files) to set a persistent tally directory for pam_faillock, which is a standard STIG hardening step with minimal risk of lockout if performed correctly.",
+    "requires_human_review": false,
+    "estimated_impact": "authentication/authorization affected; pam_configuration; auth_policy",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "accounts_passwords_pam_faillock_dir",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 3.973784923553467,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 1.552,
+          "review_qa_seconds": 2.421,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "I determined the issue is that pam_faillock must use a persistent tally directory. The fix involves using authselect to enable the withpam_faillock feature and then adding the dir option to the relevant PAM stack entries. Steps: check authselect exists, get current profile, enable the feature (authselect enable-feature -b withpam_faillock), then edit the system-auth and password-auth files to include `dir=/var/log/faillock` in the pam_faillock.so line (both preauth and account). This ensures persistent tallies and resolves the finding.\n\nUse authselect to create a custom profile (e.g., `authselect create-profile myprofile -b`) and then edit the generated files, or directly edit `/etc/pam.d/system-auth` and `/etc/pam.d/password-auth`. Locate the `pam_faillock.so` lines, check for the `dir` option, and set it to `/var/log/faillock` if missing, avoiding duplicate entries. Ensure the changes are applied consistently across both files.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "Direct in\u2011place edits of PAM files with a fragile sed regex can corrupt the PAM configuration, potentially preventing successful authentication for SSH, sudo, login, and other services. The plan also bypasses the recommended authselect workflow, risking integrity checks and future overwrites. No backup or directory creation is performed, increasing the chance of lockout or misconfiguration.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "accounts_passwords_pam_faillock_dir",
+      "is_optimal": false,
+      "approve": true,
+      "feedback": "The plan adds the required dir option to pam_faillock lines, which would make the tally directory persistent and satisfy the STIG requirement. However, it bypasses the recommended authselect workflow and may be overwritten on future authselect updates. The sed regex is also fragile and could produce malformed lines. Adding directory creation and permission checks would improve robustness.",
+      "concerns": [
+        "Direct manual edits to PAM files can break authselect integrity on systems that use authselect.",
+        "The provided sed regex may duplicate or misplace the dir option, especially if multiple pam_faillock entries exist.",
+        "The plan does not ensure the /var/log/faillock directory exists with correct ownership/permissions.",
+        "No backup of the original PAM files is made before editing."
+      ],
+      "suggested_improvements": [
+        "Use authselect (or authconfig) to enable the faillock feature and set the dir option via the profile, ensuring future compatibility.",
+        "Create the tally directory (e.g., mkdir -p /var/log/faillock && chmod 700 /var/log/faillock && chown root:root /var/log/faillock).",
+        "Backup PAM files before applying changes (e.g., cp /etc/pam.d/system-auth /etc/pam.d/system-auth.bak).",
+        "Employ a more precise editing method (e.g., authselect apply-changes -b or a script that parses each line and injects dir= only when missing).",
+        "Validate the PAM configuration after editing with pam-auth-update or authselect verify."
+      ],
+      "security_score": 7,
+      "best_practices_followed": false
+    }
+  ]
+}
