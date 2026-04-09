@@ -1,0 +1,91 @@
+{
+  "vulnerability": {
+    "id": "sysctl_net_ipv6_conf_default_accept_redirects",
+    "title": "Disable Kernel Parameter for Accepting ICMP Redirects by Default on IPv6 Interfaces",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "To set the runtime status of the net.ipv6.conf.default.accept_redirects kernel parameter, run the following command: $ sudo sysctl -w net.ipv6.conf.default.accept_redirects=0 To make sure that the setting is persistent, add the following line to a file in the directory /etc/sysctl.d: net.ipv6.conf.default.accept_redirects = 0",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then # Comment out any occurrences of net.ipv6.conf.default.accept_redirects from /etc/sysctl.d/*.conf files for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf; do # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf) if [[ \"$(readlink -f \"$f\")\" == \"/etc/sysctl.conf\" ]]; then continue; fi matching_list=$(grep -P '^(?!#).*[\\s]*net.ipv6.conf.default.accept_redirects.*$' $f | uniq ) if ! test -z \"$matching_list\"; then while IFS= read -r entry; do escaped_entry=$(sed -e 's|/|\\\\/|g' <<< \"$entry\") # comment out \"net.ipv6.conf.default.accept_redirects\" matches to preserve user data sed -i --follow-symlinks \"s/^${escaped_entry}$/# &/g\" $f done <<< \"$matchin",
+    "result": "fail",
+    "rule": "sysctl_net_ipv6_conf_default_accept_redirects",
+    "oval_id": "xccdf_org.ssgproject.content_rule_sysctl_net_ipv6_conf_default_accept_redirects",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "sysctl_net_ipv6_conf_default_accept_redirects",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The remediation involves setting a sysctl parameter and adding a line to a sysctl.d file, which is a standard, low-risk configuration change that does not affect authentication, authorization, or critical services.",
+    "requires_human_review": false,
+    "estimated_impact": "networking affected",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "sysctl_net_ipv6_conf_default_accept_redirects",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 124.79261565208435,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 31.933,
+          "review_qa_seconds": 92.856,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We are to do an OpenSCAP remediation: disable kernel parameter accept_redirects by default for IPv6 interfaces. We must modify /etc/sysctl.d/ files and apply runtime. We shall do following steps:\n\n1. plan: read /etc/sysctl.conf maybe not needed. We need to install setting in /etc/sysctl.d/80-ssg-base.conf or create. According to guidelines, we should use minimal modifications: add line net.ipv6.conf.default.accept_redirects = 0 to a file in /etc/sysctl.d/. We must also check for existing lines in other conf files; but simplest: just write to /etc/sysctl.d/99-ssg-ipv6-redirect.conf adding that line. We also need to run sysctl -w net.ipv6.conf.default.accept_redirects=0.\n\nWe must use the review_plan tool first. Let's produce plan: read instructions: \"return the review_plan with full plan description.\"\n\nSo plan steps: 1) Check if runtime already set: run sysctl net.ipv6.conf.default.accept_redirects; but we probably will set it anyway.\n\nWe will use run_cmd to exec \"sysctl -w net.ipv6.conf.default.accept_redirects=0\" after editing config file.\n\nWe need to not duplicate lines. We'll create /etc/sysctl.d/80-ssg-ipv6.conf, but first check if any existing file present includes that variable. Use grep. But easier: use sed to comment any existing in /etc/sysctl.d/*.conf and run updated config.\n\nBut guidelines: \"Use read_file to inspect the target config file BEFORE modifying it.\" So we need to read relevant file. For adding new file we don't need existing. We'll create new file.\n\nHence no need to read existing. But to avoid duplicates we ensure file not containing the line.\n\nSo Step: Use run_cmd to create /etc/sysctl.d/80-ssg-ipv6.conf with content. But we need to write file using write_file. But first check if file exists; we can read; if file exists, read content. We need to ensure line not added twice. We'll check if the file already contains line.\n\nSo plan: read_file /etc/sysctl.d/80-ssg-ipv6.conf. If empty or variable missing, write updated file or add line.\n\nBut simpler: create a new file: /etc/sysctl.d/80-ssg-ipv6.sysctl. We'll write the line. Then set runtime parameter.\n\nWe also need to ensure no duplicates across files: we could use sed -i to comment existing occurrences. However, the requirement says \"The remediation involves setting a sysctl parameter and adding a line to a sysctl.d file.\" It also recommends comment any occurrences in /etc/sysctl.d/*.conf etc. But we can just add a new file; it's acceptable.\n\nThus we propose: create file /etc/sysctl.d/80-ssg-ipv6-redirect.conf with content \"net.ipv6.conf.default.accept_redirects = 0\". After creating, run sysctl -w to apply.\n\nWe also might comment out any older lines: read through all /etc/sysctl.d/*.conf; if file contains line, modify it. We can implement: iterate over files; for each file, use sed to comment out lines. But this may require multi-commands. We can just use sed -i 's/^net.ipv6.conf.default.accept_redirects.*$/# &/' file. But we need to run per file.\n\nI'll design plan: read each file, use sed to comment if not already.\n\nBut per rule, we only need to ensure persistent. But it is safer to comment duplicates.\n\nSo final: Plan:\n\n- For each file in /etc/sysctl.d/*.conf, /run/sysctl.d/*.conf, /usr/local/lib/sysctl.d/*.conf drop symlink (skip). We'll iterate, but maybe only /etc/sysctl.d/*.conf exists. We'll just handle /etc/sysctl.d.\n\n- Use sed -i 's/^[[:space:]]*net\\.ipv6\\.conf\\.default\\.accept_redirects[^#]*$/# &/' file (comment mismatched). This ensures no duplicate.\n\n- Then create /etc/sysctl.d/80-ssg-ipv6-redirect.conf with line. If file exists, read file. If line missing, append.\n\n- Then run sysctl -w.\n\nNow produce review plan.\n\n",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "QA validation error: HTTPSConnectionPool(host='openrouter.ai', port=443): Read timed out. (read timeout=90)",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "sysctl_net_ipv6_conf_default_accept_redirects",
+      "is_optimal": true,
+      "approve": true,
+      "feedback": null,
+      "concerns": [
+        "Does not address potential existing setting in /etc/sysctl.conf; might miss this source",
+        "Commenting logic may inadvertently comment out lines that contain the key in comments or in other contexts if regex is too broad",
+        "The plan uses sed -i without explicit follow-symlink handling for symlinked conf files, which could result in unmodified originals"
+      ],
+      "suggested_improvements": [
+        "Include /etc/sysctl.conf in the comment-out pass or verify it manually",
+        "Use a more specific regex such as '^\\s*net\\.ipv6\\.conf\\.default\\.accept_redirects\\s*=\\s*[^#]' to avoid touching commented lines",
+        "Add a step to set correct file ownership/permissions (root:root, 644) after creating/updating the conf file",
+        "After modifying files, run 'sysctl --system' (or sysctl -p) to reapply all sysctl settings instead of just the single -w"
+      ],
+      "security_score": 9,
+      "best_practices_followed": true
+    }
+  ]
+}
