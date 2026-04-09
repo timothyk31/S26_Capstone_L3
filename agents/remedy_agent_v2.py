@@ -21,6 +21,7 @@ from typing import Any, Dict, List, Optional
 
 from rich.console import Console
 
+from worker_display import worker_print
 from agents.remedy_agent import RemedyAgent
 from agents.review_agent_v2 import ReviewAgentV2
 from schemas import (
@@ -78,9 +79,9 @@ class RemedyAgentV2:
         vid = vuln.id
         start = time.time()
 
-        console.print(
-            f"[bold cyan]  [{vid}] V2 Remedy: starting single-session "
-            f"plan→review→apply (attempt {input_data.attempt_number})[/bold cyan]"
+        worker_print(
+            f"[bold cyan]  Remedy session[/bold cyan]  {vid}  "
+            f"[dim]attempt {input_data.attempt_number}[/dim]"
         )
 
         # Build the initial user prompt — same helper as remedy_agent, which
@@ -113,15 +114,16 @@ class RemedyAgentV2:
         )
 
         try:
-            session_result = self._run_v2_session(
-                user_prompt=user_prompt,
-                session_label=session_label,
-                vuln=vuln,
-                stub_review_input=stub_review_input,
-                attempt_number=input_data.attempt_number,
-            )
+            with self.remedy_agent.executor.hold_files():
+                session_result = self._run_v2_session(
+                    user_prompt=user_prompt,
+                    session_label=session_label,
+                    vuln=vuln,
+                    stub_review_input=stub_review_input,
+                    attempt_number=input_data.attempt_number,
+                )
         except Exception as exc:
-            console.print(f"[red]  [{vid}] V2 session error: {exc}[/red]")
+            worker_print(f"[red]  x Session error:[/red] {exc}")
             return (
                 RemediationAttempt(
                     finding_id=vid,
@@ -401,9 +403,9 @@ class RemedyAgentV2:
 
                 if name == "review_plan":
                     plan_description = (args.get("plan_description") or "").strip()
-                    console.print(
-                        f"[bold cyan]  [{vuln.id}] review_plan called — "
-                        f"invoking Review+QA[/bold cyan]"
+                    worker_print(
+                        f"[bold cyan]  review_plan[/bold cyan]  {vuln.id}  "
+                        f"[dim]invoking Review+QA[/dim]"
                     )
                     advisory, payload = self._handle_review_plan(
                         plan_description=plan_description,
@@ -418,10 +420,10 @@ class RemedyAgentV2:
                         consecutive_review_rejections += 1
                         if consecutive_review_rejections >= self._MAX_REVIEW_REJECTIONS:
                             review_plan_capped = True
-                            console.print(
-                                f"[yellow]  [{vuln.id}] review_plan cap reached "
-                                f"({consecutive_review_rejections} consecutive "
-                                f"rejections) — ending attempt[/yellow]"
+                            worker_print(
+                                f"[yellow]  x Review cap reached[/yellow]  "
+                                f"[dim]{consecutive_review_rejections} rejections "
+                                f"- ending attempt[/dim]"
                             )
                             # End the session — don't force the LLM to apply a rejected plan
                             result_content = json.dumps(payload)

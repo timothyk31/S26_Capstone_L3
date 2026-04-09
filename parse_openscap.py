@@ -118,19 +118,33 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
             benchmark = root
     
     rule_definitions = {}
-    
+    rule_to_group = {}   # rule_id -> group title from the benchmark hierarchy
+
     if benchmark is not None:
+        # Walk the Group hierarchy to map each Rule to its parent group title.
+        # This matches the categories shown in the HTML report (e.g.
+        # "Verify Integrity with AIDE", "Federal Information Processing Standard (FIPS)").
+        def _walk_groups(elem, parent_title=''):
+            title_elem = elem.find('xccdf:title', NAMESPACES)
+            title = extract_text(title_elem) if title_elem is not None else parent_title
+            for rule in elem.findall('xccdf:Rule', NAMESPACES):
+                rule_to_group[rule.get('id', '')] = title
+            for sub in elem.findall('xccdf:Group', NAMESPACES):
+                _walk_groups(sub, title)
+
+        _walk_groups(benchmark)
+
         for rule in benchmark.findall('.//xccdf:Rule', NAMESPACES):
             rule_id = rule.get('id', '')
             title_elem = rule.find('xccdf:title', NAMESPACES)
             desc_elem = rule.find('xccdf:description', NAMESPACES)
-            
+
             # Extract fix script and fixtext from Rule definition
             fix_elem = rule.find('xccdf:fix', NAMESPACES)
             fixtext_elem = rule.find('xccdf:fixtext', NAMESPACES)
             fix_text = extract_text(fix_elem) if fix_elem is not None else ""
             fixtext_text = extract_text(fixtext_elem) if fixtext_elem is not None else ""
-            
+
             rule_definitions[rule_id] = {
                 'title': extract_text(title_elem) if title_elem is not None else rule_id,
                 'description': extract_text(desc_elem) if desc_elem is not None else "",
@@ -193,6 +207,7 @@ def parse_openscap(file_path: str, output_json: str = "parsed_openscap_vulns.jso
             "result": result_text.lower(),
             "oval_id": rule_id,
             "rule": rule_name,
+            "group": rule_to_group.get(rule_id, ""),
             "class": "compliance",
             "host": host,
             "os": os_name,

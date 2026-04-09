@@ -84,6 +84,7 @@ from schemas import (
     V2FindingResult,
     Vulnerability,
 )
+from worker_display import worker_display, worker_print
 from workflow.pipeline_v2 import PipelineV2
 
 load_dotenv(find_dotenv(), override=False)
@@ -105,15 +106,25 @@ DEFAULT_REPORT_DIR = "./reports"
 # ── Dependency grouping ───────────────────────────────────────────────────
 
 def classify_finding_group(vuln: Vulnerability) -> str:
-    """Map a vulnerability to a dependency group based on rule name patterns.
+    """Map a vulnerability to a dependency group.
 
-    Findings in the same group touch shared system resources and must run
-    serially.  Different groups are independent and can run in parallel.
+    Uses the XCCDF benchmark group from the scan report when available
+    (e.g. "Verify Integrity with AIDE", "Federal Information Processing
+    Standard (FIPS)").  These groups come from the XML and match the
+    categories shown in the HTML report — findings in the same category
+    typically touch the same subsystem and should run serially.
+
+    Falls back to rule-name heuristics when the group field is missing
+    (e.g. when using an older parsed JSON without group info).
     """
+    # ── Prefer the XCCDF group from the scan report ──────────────
+    if vuln.group:
+        return vuln.group
+
+    # ── Fallback: rule-name heuristics ───────────────────────────
     rule = vuln.rule or vuln.oval_id or vuln.id or ""
     rule = rule.replace("xccdf_org.ssgproject.content_rule_", "")
 
-    # PAM / password — all touch /etc/pam.d/ and /etc/security/
     if rule.startswith((
         "accounts_password_pam_", "accounts_passwords_pam_faillock_",
         "account_password_pam_", "no_empty_passwords",
@@ -123,19 +134,14 @@ def classify_finding_group(vuln: Vulnerability) -> str:
         return "sysctl"
     if rule.startswith("mount_option_"):
         return "mount"
-    if rule.startswith("banner_"):
-        return "banner"
-    if rule.startswith("chronyd_") or rule.startswith("chronyd_or_ntpd"):
-        return "chronyd"
-    # File permissions / ownership — each targets a different file, safe to parallelize
-    if rule.startswith(("file_permissions_", "file_owner_", "file_groupowner_",
-                        "file_permission_")):
-        return f"file__{rule}"
-    # Services and packages — each is independent
-    if rule.startswith("service_") or rule.startswith("package_"):
-        return f"svc_pkg__{rule}"
-    # Default catch-all — runs serially for safety
-    return "misc_serial"
+    if rule.startswith(("audit_rules_", "auditd_")):
+        return "audit"
+    if rule.startswith("selinux_"):
+        return "selinux"
+    if rule.startswith(("grub2_", "bootloader_")):
+        return "grub"
+    # Each unrecognized finding gets its own group
+    return f"independent__{rule}"
 
 
 def build_dependency_groups(
@@ -147,6 +153,7 @@ def build_dependency_groups(
         g = classify_finding_group(v)
         groups.setdefault(g, []).append(v)
     return groups
+
 
 
 # ── Inventory loader ───────────────────────────────────────────────────────
@@ -241,6 +248,7 @@ def load_vulnerabilities(
                     oval_id=entry.get("oval_id"),
                     scan_class=entry.get("class"),
                     os=entry.get("os"),
+                    group=entry.get("group"),
                 )
             )
         except (ValidationError, KeyError) as exc:
@@ -597,6 +605,7 @@ def main() -> int:
                     result=entry.get("result"), rule=entry.get("rule"),
                     oval_id=entry.get("oval_id"),
                     scan_class=entry.get("class"), os=entry.get("os"),
+                    group=entry.get("group"),
                 ))
             except (ValidationError, KeyError):
                 continue
@@ -763,16 +772,6 @@ def main() -> int:
         )
         return updated_, is_fixed_, scan_dur_
 
-    def _make_progress() -> Progress:
-        return Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            TimeElapsedColumn(),
-            console=console,
-        )
-
     # ────────────────────────────────────────────────────────────────
     # Phase A: Build dependency groups
     # ────────────────────────────────────────────────────────────────
@@ -793,8 +792,7 @@ def main() -> int:
         f"up to {max_rounds} attempts each) ──[/bold cyan]\n"
     )
 
-    # Thread-safe progress + result collection
-    progress_lock = threading.Lock()
+    # Thread-safe result collection
     results_lock = threading.Lock()
     all_group_results: List[V2FindingResult] = []
     fixed_at_round: Dict[int, List[str]] = {}
@@ -803,10 +801,9 @@ def main() -> int:
         group_name: str,
         group_vulns: List[Vulnerability],
         pip: PipelineV2,
-        progress_bar: Progress,
-        progress_task,
     ) -> None:
         """Process all findings in one dependency group serially."""
+        worker_display.assign_worker(group_name, num_findings=len(group_vulns))
         tag = f"[dim]\\[{group_name}][/dim] "
         for vuln in group_vulns:
             attempts: List[RemediationAttempt] = []
@@ -827,7 +824,7 @@ def main() -> int:
                         group_label=group_name,
                     )
                 except Exception as exc:
-                    console.print(f"{tag}[red]Pipeline error for {vuln.id}: {exc}[/red]")
+                    worker_print(f"{tag}[red]  x Pipeline error:[/red] {vuln.id} — {exc}")
                     result = V2FindingResult(
                         vulnerability=vuln,
                         triage=triage_decision or TriageDecision(
@@ -861,9 +858,9 @@ def main() -> int:
                         result = result.model_copy(update={"final_status": "failed"})
                         attempts.append(result.remediation)
                         reason = result.pre_approval.rejection_reason or "review/QA rejected"
-                        console.print(
-                            f"{tag}  [{vuln.id}] attempt {attempt_num} "
-                            f"review/QA rejected — skipping scan ({reason})"
+                        worker_print(
+                            f"{tag}[yellow]  x Rejected[/yellow]  {vuln.id}  "
+                            f"[dim]attempt {attempt_num} | {reason}[/dim]"
                         )
                         out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vuln.id)
                         out_path = out_dir / f"attempt_{attempt_num}_output.json"
@@ -878,12 +875,16 @@ def main() -> int:
                     result, is_fixed, scan_dur = _scan_and_update(scanner, vuln, result)
                     attempts.append(result.remediation)
 
-                    rule_label = vuln.rule or vuln.id
-                    status_label = "PASS" if is_fixed else "FAIL"
-                    console.print(
-                        f"{tag}  [{vuln.id}] ({rule_label}) attempt {attempt_num} "
-                        f"scan -> {status_label} ({scan_dur:.1f}s)"
-                    )
+                    if is_fixed:
+                        worker_print(
+                            f"{tag}[bold green]  + PASS[/bold green]  {vuln.id}  "
+                            f"[dim]attempt {attempt_num} | scan {scan_dur:.1f}s[/dim]"
+                        )
+                    else:
+                        worker_print(
+                            f"{tag}[red]  - FAIL[/red]  {vuln.id}  "
+                            f"[dim]attempt {attempt_num} | scan {scan_dur:.1f}s[/dim]"
+                        )
 
                     out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vuln.id)
                     out_path = out_dir / f"attempt_{attempt_num}_output.json"
@@ -903,14 +904,12 @@ def main() -> int:
 
             with results_lock:
                 all_group_results.append(result)
-            with progress_lock:
-                progress_bar.advance(progress_task)
+            worker_display.advance()
 
-    # Launch groups in parallel
-    with _make_progress() as progress:
-        ptask = progress.add_task("Processing findings", total=total)
-
-        max_workers = min(len(groups), args.max_parallel_groups)
+    # Launch groups in parallel — ThreadPoolExecutor naturally balances work
+    max_workers = min(len(groups), args.max_parallel_groups)
+    worker_display.start(num_workers=max_workers, total_findings=total)
+    try:
         with ThreadPoolExecutor(max_workers=max_workers) as pool:
             futures = {}
             for gname, gvulns in groups.items():
@@ -919,16 +918,18 @@ def main() -> int:
                     transcript_dir, agent_report_dir, run_id,
                 )
                 fut = pool.submit(
-                    _process_group, gname, gvulns, pip, progress, ptask,
+                    _process_group, gname, gvulns, pip,
                 )
                 futures[fut] = gname
 
             for fut in as_completed(futures):
                 gname = futures[fut]
                 try:
-                    fut.result()  # raises if _process_group raised
+                    fut.result()
                 except Exception as exc:
-                    console.print(f"[dim]\\[{gname}][/dim] [red]Group failed: {exc}[/red]")
+                    worker_print(f"[red]  x Group failed:[/red] {gname} — {exc}")
+    finally:
+        worker_display.stop()
 
     # Combine and re-sort results to original finding order
     results: List[V2FindingResult] = list(all_group_results)
