@@ -41,6 +41,20 @@ def _size_bucket(n: int, small_max: int, medium_max: int) -> str:
     return "large"
 
 
+def _cumulative_pass_rates(
+    pass1_count: int,
+    pass2_count: int,
+    pass3_count: int,
+    total_found: int,
+) -> Tuple[float, float, float]:
+    if total_found <= 0:
+        return 0.0, 0.0, 0.0
+    p1 = (pass1_count / total_found) * 100.0
+    p2 = ((pass1_count + pass2_count) / total_found) * 100.0
+    p3 = ((pass1_count + pass2_count + pass3_count) / total_found) * 100.0
+    return p1, p2, p3
+
+
 def _model_name(row: Dict[str, str], csv_path: Path) -> str:
     for key in ("remedy_model", "review_model", "qa_model", "triage_model"):
         v = (row.get(key) or "").strip()
@@ -199,12 +213,19 @@ def _stacked_bar_html(
     h2 = max(0, int((pass2_pct / 100.0) * total_height))
     h3 = max(0, int((pass3_pct / 100.0) * total_height))
     total_h = h1 + h2 + h3
-    s1 = (pass1_count / total_passed * 100.0) if total_passed else 0.0
-    s2 = (pass2_count / total_passed * 100.0) if total_passed else 0.0
-    s3 = (pass3_count / total_passed * 100.0) if total_passed else 0.0
-    t1 = f"pass@1: {s1:.1f}% of passed ({pass1_count}/{total_passed}), {pass1_pct:.1f}% of found ({pass1_count}/{total_found})"
-    t2 = f"pass@2: {s2:.1f}% of passed ({pass2_count}/{total_passed}), {pass2_pct:.1f}% of found ({pass2_count}/{total_found})"
-    t3 = f"pass@3: {s3:.1f}% of passed ({pass3_count}/{total_passed}), {pass3_pct:.1f}% of found ({pass3_count}/{total_found})"
+    c1 = pass1_count
+    c2 = pass1_count + pass2_count
+    c3 = pass1_count + pass2_count + pass3_count
+    cp1, cp2, cp3 = _cumulative_pass_rates(pass1_count, pass2_count, pass3_count, total_found)
+    t1 = f"pass@1 cumulative: {cp1:.1f}% of found ({c1}/{total_found})"
+    t2 = (
+        f"pass@2 cumulative: {cp2:.1f}% of found ({c2}/{total_found}); "
+        f"added at round 2: {pass2_pct:.1f}% ({pass2_count}/{total_found})"
+    )
+    t3 = (
+        f"pass@3 cumulative: {cp3:.1f}% of found ({c3}/{total_found}); "
+        f"added at round 3: {pass3_pct:.1f}% ({pass3_count}/{total_found})"
+    )
     sz = html.escape(size_letter.strip().upper()[:1] or "?")
     pct_s = f"{pct_total:.1f}%"
     return (
@@ -236,7 +257,8 @@ def render_root(out_dir: Path, by_model_size: Dict[Tuple[str, str], List[RunStat
             pct1 = (p1 / found * 100.0) if found else 0.0
             pct2 = (p2 / found * 100.0) if found else 0.0
             pct3 = (p3 / found * 100.0) if found else 0.0
-            total_pct = pct1 + pct2 + pct3
+            _cp1, _cp2, cp3 = _cumulative_pass_rates(p1, p2, p3, found)
+            total_pct = cp3
             bar_inner = _stacked_bar_html(
                 pct1,
                 pct2,
@@ -250,14 +272,14 @@ def render_root(out_dir: Path, by_model_size: Dict[Tuple[str, str], List[RunStat
                 size_letter=size[0],
                 pct_total=total_pct,
             )
-            bars.append(f'<a class="mini" href="{_slug(m)}/{size}/index.html" title="{size} {total_pct:.1f}%">{bar_inner}</a>')
+            bars.append(f'<a class="mini" href="{_slug(m)}/{size}/index.html" title="{size} pass@3 {total_pct:.1f}%">{bar_inner}</a>')
         groups.append(f'<div class="group"><div class="group-bars">{"".join(bars)}</div></div>')
         labels.append(f'<a class="xlabel-model" href="{_slug(m)}/index.html">{html.escape(m)}</a>')
 
     (out_dir / "index.html").write_text(
         f"""<!doctype html><html><head><meta charset="utf-8"/><title>Benchmark</title>{_style()}</head><body>
 <h1>LLM Benchmark Overview</h1>
-<p>Stacked remediation bars by size. Each bar segment shows pass@1/pass@2/pass@3 contribution to total remediation %.</p>
+<p>Stacked remediation bars by size. Displayed pass@ values are cumulative, so pass@3 includes pass@1 and pass@2 successes.</p>
 <div class="legend">
   <span><span class="swatch" style="background:#2aa65a"></span>pass@1</span>
   <span><span class="swatch" style="background:#66cdaa"></span>pass@2</span>
@@ -295,7 +317,8 @@ def render_model_pages(out_dir: Path, runs: List[RunStats]) -> None:
             pct1 = (p1 / found * 100.0) if found else 0.0
             pct2 = (p2 / found * 100.0) if found else 0.0
             pct3 = (p3 / found * 100.0) if found else 0.0
-            pct = round(pct1 + pct2 + pct3, 1)
+            cp1, cp2, cp3 = _cumulative_pass_rates(p1, p2, p3, found)
+            pct = round(cp3, 1)
             bar_inner = _stacked_bar_html(
                 pct1,
                 pct2,
@@ -309,10 +332,10 @@ def render_model_pages(out_dir: Path, runs: List[RunStats]) -> None:
                 size_letter=size[0],
                 pct_total=pct,
             )
-            bars.append(f'<div class="group"><div class="group-bars"><a class="mini" href="{size}/index.html" title="{size} {pct:.1f}%">{bar_inner}</a></div></div>')
+            bars.append(f'<div class="group"><div class="group-bars"><a class="mini" href="{size}/index.html" title="{size} pass@3 {pct:.1f}%">{bar_inner}</a></div></div>')
             xlabels.append(
                 f'<a class="xlabel-model" href="{size}/index.html">{size.title()} '
-                f'(P1 {pct1:.1f}% / P2 {pct2:.1f}% / P3 {pct3:.1f}%)</a>'
+                f'(P1 {cp1:.1f}% / P2 {cp2:.1f}% / P3 {cp3:.1f}%)</a>'
             )
             rows.append(f"<tr><td>{size.title()}</td><td>{found}</td><td>{succ}</td><td>{fail}</td><td>{pct}%</td><td>{len(rs)}</td></tr>")
 
@@ -348,9 +371,10 @@ def render_size_page(size_dir: Path, model: str, size: str, runs: List[RunStats]
     total_p1 = sum(r.pass1 for r in runs)
     total_p2 = sum(r.pass2 for r in runs)
     total_p3 = sum(r.pass3 for r in runs)
-    p1_pct = round((total_p1 / total_found) * 100.0, 1) if total_found else 0.0
-    p2_pct = round((total_p2 / total_found) * 100.0, 1) if total_found else 0.0
-    p3_pct = round((total_p3 / total_found) * 100.0, 1) if total_found else 0.0
+    p1_pct, p2_pct, p3_pct = _cumulative_pass_rates(total_p1, total_p2, total_p3, total_found)
+    p1_pct = round(p1_pct, 1)
+    p2_pct = round(p2_pct, 1)
+    p3_pct = round(p3_pct, 1)
 
     run_rows = []
     for i, r in enumerate(sorted(runs, key=lambda x: x.run_id), start=1):
@@ -382,14 +406,18 @@ def render_size_page(size_dir: Path, model: str, size: str, runs: List[RunStats]
 
 def render_run_page(run_dir: Path, model: str, size: str, run_label: str, run_slug: str, r: RunStats) -> None:
     run_dir.mkdir(parents=True, exist_ok=True)
-    p1_pct = round((r.pass1 / r.found) * 100.0, 1) if r.found else 0.0
-    p2_pct = round((r.pass2 / r.found) * 100.0, 1) if r.found else 0.0
-    p3_pct = round((r.pass3 / r.found) * 100.0, 1) if r.found else 0.0
+    p1_pct, p2_pct, p3_pct = _cumulative_pass_rates(r.pass1, r.pass2, r.pass3, r.found)
+    p1_pct = round(p1_pct, 1)
+    p2_pct = round(p2_pct, 1)
+    p3_pct = round(p3_pct, 1)
+    c1 = r.pass1
+    c2 = r.pass1 + r.pass2
+    c3 = r.pass1 + r.pass2 + r.pass3
     counts = [
         ("Total Found", r.found, "#5b8def"),
-        ("Pass@1", r.pass1, "#2aa65a"),
-        ("Pass@2", r.pass2, "#66cdaa"),
-        ("Pass@3", r.pass3, "#9be0d8"),
+        ("Pass@1", c1, "#2aa65a"),
+        ("Pass@2", c2, "#66cdaa"),
+        ("Pass@3", c3, "#9be0d8"),
         ("Total Succeeded", r.succeeded, "#15803d"),
         ("Total Failed", r.failed, "#d9534f"),
     ]
