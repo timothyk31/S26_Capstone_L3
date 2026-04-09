@@ -804,7 +804,7 @@ def main() -> int:
                         group_label=group_name,
                     )
                 except Exception as exc:
-                    worker_print(f"{tag}[red]Pipeline error for {vuln.id}: {exc}[/red]")
+                    worker_print(f"{tag}[red]  x Pipeline error:[/red] {vuln.id} — {exc}")
                     result = V2FindingResult(
                         vulnerability=vuln,
                         triage=triage_decision or TriageDecision(
@@ -839,8 +839,8 @@ def main() -> int:
                         attempts.append(result.remediation)
                         reason = result.pre_approval.rejection_reason or "review/QA rejected"
                         worker_print(
-                            f"{tag}  [{vuln.id}] attempt {attempt_num} "
-                            f"review/QA rejected — skipping scan ({reason})"
+                            f"{tag}[yellow]  x Rejected[/yellow]  {vuln.id}  "
+                            f"[dim]attempt {attempt_num} | {reason}[/dim]"
                         )
                         out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vuln.id)
                         out_path = out_dir / f"attempt_{attempt_num}_output.json"
@@ -855,12 +855,16 @@ def main() -> int:
                     result, is_fixed, scan_dur = _scan_and_update(scanner, vuln, result)
                     attempts.append(result.remediation)
 
-                    rule_label = vuln.rule or vuln.id
-                    status_label = "PASS" if is_fixed else "FAIL"
-                    worker_print(
-                        f"{tag}  [{vuln.id}] ({rule_label}) attempt {attempt_num} "
-                        f"scan -> {status_label} ({scan_dur:.1f}s)"
-                    )
+                    if is_fixed:
+                        worker_print(
+                            f"{tag}[bold green]  + PASS[/bold green]  {vuln.id}  "
+                            f"[dim]attempt {attempt_num} | scan {scan_dur:.1f}s[/dim]"
+                        )
+                    else:
+                        worker_print(
+                            f"{tag}[red]  - FAIL[/red]  {vuln.id}  "
+                            f"[dim]attempt {attempt_num} | scan {scan_dur:.1f}s[/dim]"
+                        )
 
                     out_dir = agent_report_dir / "remedy_v2" / run_id / _safe_dirname(vuln.id)
                     out_path = out_dir / f"attempt_{attempt_num}_output.json"
@@ -903,7 +907,7 @@ def main() -> int:
                 try:
                     fut.result()
                 except Exception as exc:
-                    worker_print(f"[red]Group {gname} failed: {exc}[/red]")
+                    worker_print(f"[red]  x Group failed:[/red] {gname} — {exc}")
     finally:
         worker_display.stop()
 

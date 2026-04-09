@@ -242,8 +242,9 @@ class WorkerDisplay:
                 bar_width = 20
                 filled = int(bar_width * completed / total) if total else 0
                 bar = "━" * filled + "╺" + "─" * (bar_width - filled - 1) if filled < bar_width else "━" * bar_width
+                pct = int(100 * completed / total) if total else 0
                 parts.append(Text.from_markup(
-                    f"[green]{bar}[/green]  {completed}/{total}  "
+                    f"[green]{bar}[/green]  {completed}/{total}  [dim]{pct}%[/dim]"
                 ))
 
             # Log lines — only show the most recent lines that fit the panel
@@ -258,15 +259,18 @@ class WorkerDisplay:
                 visible_lines = lines[-max_visible:]
                 parts.append(Text.from_markup("\n".join(visible_lines)))
             elif not total:
-                parts.append(Text("Waiting...", style="dim"))
+                parts.append(Text("idle", style="dim"))
 
-            content = Group(*parts) if len(parts) > 1 else (parts[0] if parts else Text("Waiting...", style="dim"))
+            content = Group(*parts) if len(parts) > 1 else (parts[0] if parts else Text("idle", style="dim"))
 
-            subtitle = f"[dim]{group}[/dim]" if group else ""
+            # Build title with group name inline
+            title = f"[bold]{wid}[/bold]"
+            if group:
+                title += f"  [dim]{group}[/dim]"
+
             panel = Panel(
                 content,
-                title=f"[bold]{wid}[/bold]",
-                subtitle=subtitle,
+                title=title,
                 border_style="cyan",
                 height=None,
             )
@@ -277,10 +281,16 @@ class WorkerDisplay:
                 pass
 
         # Progress footer
-        progress_msg = (
-            self._progress_text
-            or f"Overall: {self._total_completed}/{self._total_findings} findings processed"
-        )
+        done = self._total_completed
+        total = self._total_findings
+        if total > 0:
+            pct = int(100 * done / total)
+            bar_w = 30
+            filled = int(bar_w * done / total)
+            bar = "━" * filled + "╺" + "─" * (bar_w - filled - 1) if filled < bar_w else "━" * bar_w
+            progress_msg = self._progress_text or f"{bar}  {done}/{total} findings  {pct}%"
+        else:
+            progress_msg = self._progress_text or "Starting..."
         try:
             self._layout["progress"].update(
                 Panel(Text(progress_msg), border_style="green", title="Progress")

@@ -61,6 +61,8 @@ class FileLockManager:
         - New paths are acquired in sorted order to prevent deadlocks.
         - If there is no active session, this is a no-op so that commands
           outside a session still work (just without file locking).
+        - If a lock is contended, a waiting message is shown in the worker
+          display panel and a resume message is shown once acquired.
         """
         held: set[str] | None = getattr(self._thread_held, "paths", None)
         if held is None:
@@ -71,9 +73,23 @@ class FileLockManager:
         if not new_paths:
             return
 
+        from worker_display import worker_print
+
         for p in new_paths:
             lk = self._get_lock(p)
-            lk.acquire()
+            # Try non-blocking first to avoid the log message on uncontended locks
+            if not lk.acquire(blocking=False):
+                short = p.rsplit("/", 1)[-1]
+                worker_print(
+                    f"[bold yellow]  >> waiting on lock: {short}[/bold yellow]"
+                )
+                t0 = time.time()
+                lk.acquire()
+                wait = time.time() - t0
+                worker_print(
+                    f"[green]  >> lock acquired: {short} "
+                    f"(waited {wait:.1f}s)[/green]"
+                )
             held.add(p)
 
     def _release_all(self) -> None:

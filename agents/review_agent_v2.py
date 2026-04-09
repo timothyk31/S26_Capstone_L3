@@ -53,11 +53,11 @@ class ReviewAgentV2:
         vid = review_input.vulnerability.id
 
         # ── Step 1: Review ────────────────────────────────────────────
-        worker_print(f"[bold cyan]  [{vid}] V2 Review: evaluating fix quality[/bold cyan]")
+        worker_print(f"[bold cyan]  Review[/bold cyan]  {vid}")
         try:
             review_verdict: ReviewVerdict = self.review_agent.process(review_input, attempt=attempt)
         except Exception as exc:
-            worker_print(f"[red]  [{vid}] Review error: {exc}[/red]")
+            worker_print(f"[red]  x Review error:[/red] {exc}")
             review_verdict = ReviewVerdict(
                 finding_id=vid,
                 is_optimal=False,
@@ -67,10 +67,11 @@ class ReviewAgentV2:
             )
 
         if not review_verdict.approve:
-            worker_print(
-                f"[yellow]  [{vid}] V2 Review → REJECTED: "
-                f"{review_verdict.feedback or 'no feedback'}[/yellow]"
-            )
+            feedback = review_verdict.feedback or "no feedback"
+            # Truncate long feedback for display
+            if len(feedback) > 80:
+                feedback = feedback[:77] + "..."
+            worker_print(f"[yellow]  x Review REJECTED:[/yellow] {feedback}")
             return PreApprovalResult(
                 review_verdict=review_verdict,
                 qa_result=None,
@@ -79,12 +80,12 @@ class ReviewAgentV2:
             )
 
         worker_print(
-            f"[green]  [{vid}] V2 Review → APPROVED "
-            f"(score={review_verdict.security_score})[/green]"
+            f"[green]  + Review APPROVED[/green]  "
+            f"[dim]score={review_verdict.security_score}[/dim]"
         )
 
         # ── Step 2: QA ────────────────────────────────────────────────
-        worker_print(f"[bold cyan]  [{vid}] V2 QA: expert safety opinion[/bold cyan]")
+        worker_print(f"[bold cyan]  QA[/bold cyan]  {vid}")
         qa_result: Optional[QAResult] = None
         try:
             qa_input = QAInput(
@@ -94,7 +95,7 @@ class ReviewAgentV2:
             )
             qa_result = self.qa_agent.process(qa_input, attempt=attempt)
         except Exception as exc:
-            worker_print(f"[red]  [{vid}] QA error: {exc}[/red]")
+            worker_print(f"[red]  x QA error:[/red] {exc}")
             # QA error → treat as unsafe
             return PreApprovalResult(
                 review_verdict=review_verdict,
@@ -104,10 +105,10 @@ class ReviewAgentV2:
             )
 
         if not qa_result.safe:
-            worker_print(
-                f"[yellow]  [{vid}] V2 QA → UNSAFE: "
-                f"{qa_result.verdict_reason}[/yellow]"
-            )
+            reason = qa_result.verdict_reason or ""
+            if len(reason) > 80:
+                reason = reason[:77] + "..."
+            worker_print(f"[yellow]  x QA UNSAFE:[/yellow] {reason}")
             return PreApprovalResult(
                 review_verdict=review_verdict,
                 qa_result=qa_result,
@@ -116,8 +117,8 @@ class ReviewAgentV2:
             )
 
         worker_print(
-            f"[green]  [{vid}] V2 QA → SAFE "
-            f"(recommendation={qa_result.recommendation})[/green]"
+            f"[green]  + QA SAFE[/green]  "
+            f"[dim]{qa_result.recommendation}[/dim]"
         )
 
         return PreApprovalResult(

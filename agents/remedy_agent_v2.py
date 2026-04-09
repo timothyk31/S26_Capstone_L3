@@ -80,8 +80,8 @@ class RemedyAgentV2:
         start = time.time()
 
         worker_print(
-            f"[bold cyan]  [{vid}] V2 Remedy: starting single-session "
-            f"plan→review→apply (attempt {input_data.attempt_number})[/bold cyan]"
+            f"[bold cyan]  Remedy session[/bold cyan]  {vid}  "
+            f"[dim]attempt {input_data.attempt_number}[/dim]"
         )
 
         # Build the initial user prompt — same helper as remedy_agent, which
@@ -123,7 +123,7 @@ class RemedyAgentV2:
                     attempt_number=input_data.attempt_number,
                 )
         except Exception as exc:
-            worker_print(f"[red]  [{vid}] V2 session error: {exc}[/red]")
+            worker_print(f"[red]  x Session error:[/red] {exc}")
             return (
                 RemediationAttempt(
                     finding_id=vid,
@@ -404,8 +404,8 @@ class RemedyAgentV2:
                 if name == "review_plan":
                     plan_description = (args.get("plan_description") or "").strip()
                     worker_print(
-                        f"[bold cyan]  [{vuln.id}] review_plan called — "
-                        f"invoking Review+QA[/bold cyan]"
+                        f"[bold cyan]  review_plan[/bold cyan]  {vuln.id}  "
+                        f"[dim]invoking Review+QA[/dim]"
                     )
                     advisory, payload = self._handle_review_plan(
                         plan_description=plan_description,
@@ -421,9 +421,9 @@ class RemedyAgentV2:
                         if consecutive_review_rejections >= self._MAX_REVIEW_REJECTIONS:
                             review_plan_capped = True
                             worker_print(
-                                f"[yellow]  [{vuln.id}] review_plan cap reached "
-                                f"({consecutive_review_rejections} consecutive "
-                                f"rejections) — ending attempt[/yellow]"
+                                f"[yellow]  x Review cap reached[/yellow]  "
+                                f"[dim]{consecutive_review_rejections} rejections "
+                                f"- ending attempt[/dim]"
                             )
                             # End the session — don't force the LLM to apply a rejected plan
                             result_content = json.dumps(payload)
