@@ -114,13 +114,14 @@ class RemedyAgentV2:
         )
 
         try:
-            session_result = self._run_v2_session(
-                user_prompt=user_prompt,
-                session_label=session_label,
-                vuln=vuln,
-                stub_review_input=stub_review_input,
-                attempt_number=input_data.attempt_number,
-            )
+            with self.remedy_agent.executor.hold_files():
+                session_result = self._run_v2_session(
+                    user_prompt=user_prompt,
+                    session_label=session_label,
+                    vuln=vuln,
+                    stub_review_input=stub_review_input,
+                    attempt_number=input_data.attempt_number,
+                )
         except Exception as exc:
             worker_print(f"[red]  [{vid}] V2 session error: {exc}[/red]")
             return (

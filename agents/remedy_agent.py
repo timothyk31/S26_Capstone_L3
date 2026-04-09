@@ -147,7 +147,8 @@ class RemedyAgent:
         session_label = f"{vuln.id}_attempt{input_data.attempt_number}"
         (self.work_dir / f"remedy_prompt_{session_label}.txt").write_text(user_prompt, encoding="utf-8")
 
-        session_result = self._run_tool_session(user_prompt=user_prompt, session_label=session_label, vuln=vuln)
+        with self.executor.hold_files():
+            session_result = self._run_tool_session(user_prompt=user_prompt, session_label=session_label, vuln=vuln)
 
         # Pull tool traces into attempt
         attempt.commands_executed = session_result["commands_executed"]
