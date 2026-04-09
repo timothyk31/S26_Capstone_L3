@@ -569,8 +569,10 @@ class TriageAgent(BaseAgent):
 
             except (ValidationError, json.JSONDecodeError) as exc:
                 last_err = f"Validation/JSON error with {model_name}: {exc}"
+                self.log_warning(last_err)
             except Exception as exc:
                 last_err = f"API/runtime error with {model_name}: {exc}"
+                self.log_warning(last_err)
             finally:
                 self._client.model = orig_model
 

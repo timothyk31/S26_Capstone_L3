@@ -1,0 +1,132 @@
+Multi-Agent Pipeline V2 Report
+Generated: 2026-04-09T15:49:13
+Target Host: 127.0.0.1
+Scan Profile: xccdf_org.ssgproject.content_profile_stig
+================================================================================
+
+Findings processed:              12
+Successful:                      3
+Total failed:                    9
+  Attempted but failed:          0
+  Failed due to discard:         6
+  Failed due to human review:    3
+Success rate (overall):          25.0%
+Success rate (attempted only):   100.0%
+
+Fixed at attempt 1:            1
+Fixed at attempt 2:            1
+Fixed at attempt 3:            1
+
+================================================================================
+
+1. [SKIP] enable_dracut_fips_module - Enable Dracut FIPS Module
+   Severity: 3  |  Host: localhost
+   Triage: risk=critical, remediate=False
+   Final: discarded  |  Duration: 1.8s
+--------------------------------------------------------------------------------
+
+2. [SKIP] enable_fips_mode - Enable FIPS Mode
+   Severity: 3  |  Host: localhost
+   Triage: risk=critical, remediate=False
+   Final: discarded  |  Duration: 1.2s
+--------------------------------------------------------------------------------
+
+3. [SKIP] sysctl_crypto_fips_enabled - Set kernel parameter 'crypto.fips_enabled' to 1
+   Severity: 3  |  Host: localhost
+   Triage: risk=critical, remediate=False
+   Final: discarded  |  Duration: 2.6s
+--------------------------------------------------------------------------------
+
+4. [REVIEW] installed_OS_is_vendor_supported - The Installed Operating System Is Vendor Supported
+   Severity: 3  |  Host: localhost
+   Triage: risk=medium, remediate=False
+   Final: requires_human_review  |  Duration: 2.2s
+--------------------------------------------------------------------------------
+
+5. [SKIP] partition_for_var_tmp - Ensure /var/tmp Located On Separate Partition
+   Severity: 2  |  Host: localhost
+   Triage: risk=critical, remediate=False
+   Final: discarded  |  Duration: 0.0s
+--------------------------------------------------------------------------------
+
+6. [REVIEW] accounts_authorized_local_users - Only Authorized Local User Accounts Exist on Operating System
+   Severity: 2  |  Host: localhost
+   Triage: risk=medium, remediate=False
+   Final: requires_human_review  |  Duration: 1.4s
+--------------------------------------------------------------------------------
+
+7. [SKIP] grub2_admin_username - Set the Boot Loader Admin Username to a Non-Default Value
+   Severity: 3  |  Host: localhost
+   Triage: risk=critical, remediate=False
+   Final: discarded  |  Duration: 1.3s
+--------------------------------------------------------------------------------
+
+8. [SKIP] grub2_password - Set Boot Loader Password in grub2
+   Severity: 3  |  Host: localhost
+   Triage: risk=critical, remediate=False
+   Final: discarded  |  Duration: 1.4s
+--------------------------------------------------------------------------------
+
+9. [REVIEW] sysctl_user_max_user_namespaces_no_remediation - Disable the use of user namespaces
+   Severity: 2  |  Host: localhost
+   Triage: risk=medium, remediate=False
+   Final: requires_human_review  |  Duration: 1.4s
+--------------------------------------------------------------------------------
+
+10. [OK] postfix_prevent_unrestricted_relay - Prevent Unrestricted Mail Relaying
+   Severity: 2  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #1, scan_passed=True, cmds=6, duration=18.1s
+     - cp /etc/postfix/main.cf /etc/postfix/main.cf.bak
+     - grep -E -q '^\s*#?\s*smtpd_client_restrictions' /etc/postfix/main.cf
+     - echo 'smtpd_client_restrictions = permit_mynetworks,reject' >> /etc/postfix/main.cf
+     - systemctl reload postfix
+     - systemctl status postfix
+     - systemctl start postfix
+   Review: approve=True, optimal=False, score=8
+   Feedback: The plan will correctly add or replace the smtpd_client_restrictions line, which addresses the unrestricted relay issue. However, it should reload or restart Postfix after editing and could use postconf -e for a more atomic update. Handling commented lines and backing up the config file would also improve safety.
+   QA: safe=True, recommendation=Approve
+   Final: success  |  Duration: 19.6s
+--------------------------------------------------------------------------------
+
+11. [OK] chronyd_server_directive - Ensure Chrony is only configured with the server directive
+   Severity: 2  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #2, scan_passed=True, cmds=12, duration=33.7s
+     - cp /etc/chrony.conf /etc/chrony.conf.bak
+     - sed -i -E 's/^\s*(pool|peer|broadcast|ntp)[[:space:]]/# &/' /etc/chrony.conf
+     - sed -i -E 's/^#\s*server[[:space:]]/server /' /etc/chrony.conf
+     - chronyd -Q
+     - chronyd -t
+     - chronyd -Q -f /etc/chrony.conf
+     - which chronyd
+     - systemctl restart chronyd
+     - systemctl status chronyd --no-pager
+     - sed -i 's|^#\s*pool.*|server 2.rocky.pool.ntp.org iburst|' /etc/chrony.conf
+     - chronyd -Q -f /etc/chrony.conf
+     - systemctl restart chronyd
+   Review: approve=True, optimal=False, score=8
+   Feedback: The plan adds a server directive and validates the configuration before restarting chronyd, which will satisfy the requirement that only server directives are used. However, it lacks a backup step and does not check for existing server entries, which could lead to duplicate lines or make rollback harder.
+   QA: safe=True, recommendation=Approve
+   Final: success  |  Duration: 33.8s
+--------------------------------------------------------------------------------
+
+12. [OK] sssd_enable_certmap - Enable Certmap in SSSD
+   Severity: 2  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #3, scan_passed=True, cmds=10, duration=27.4s
+     - tar -czf /etc/sssd/sssd.conf.bak.tar.gz -C /etc/sssd ssd.conf
+     - tar -czf /etc/sssd/sssd.conf.bak.tar.gz /etc/sssd/sssd.conf
+     - dd if=/etc/sssd/sssd.conf of=/etc/sssd/sssd.conf.bak bs=1M status=none
+     - printf '\n[certmap/testing.test/rule_name]\nmatchrule = <SAN>.*EDIPI@mil\nmaprule = (userCertificate;binary={cert!bin})\ndomains = testing.test\n' >> /etc/sssd/sssd.conf
+     - chmod 600 /etc/sssd/sssd.conf
+     - restorecon -v /etc/sssd/sssd.conf
+     - sssd -t
+     - systemctl reload sssd
+     - systemctl restart sssd
+     - dnf list installed sssd
+   Review: approve=True, optimal=False, score=8
+   Feedback: The plan includes a backup, SELinux,, syntax validation, and a service reload, which should enable the required certmap. However, it does not verify that the target domain exists or prevent duplicate sections, and the backup method could be simplified.
+   QA: safe=True, recommendation=Approve
+   Final: success  |  Duration: 27.4s
+--------------------------------------------------------------------------------

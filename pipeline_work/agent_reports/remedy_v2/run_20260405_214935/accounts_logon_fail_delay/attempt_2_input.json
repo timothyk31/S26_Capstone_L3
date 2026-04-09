@@ -1,0 +1,95 @@
+{
+  "vulnerability": {
+    "id": "accounts_logon_fail_delay",
+    "title": "Ensure the Logon Failure Delay is Set Correctly in login.defs",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "To ensure the logon failure delay controlled by /etc/login.defs is set properly, add or correct the FAIL_DELAY setting in /etc/login.defs to read as follows: FAIL_DELAY",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if ( rpm --quiet -q shadow-utils && rpm --quiet -q kernel-core ); then var_accounts_fail_delay='' # Strip any search characters in the key arg so that the key can be replaced without # adding any search characters to the config file. stripped_key=$(sed 's/[\\^=\\$,;+]*//g' <<< \"^FAIL_DELAY\") # shellcheck disable=SC2059 printf -v formatted_output \"%s %s\" \"$stripped_key\" \"$var_accounts_fail_delay\" # If the key exists, change it. Otherwise, add it to the config_file. # We search for the key string followed by a word boundary (matched by \\>), # so if we search for 'setting', 'setting2' won't match. if LC_ALL=C grep -q -m 1 -i -e \"^FAIL_DELAY\\\\>\" \"/etc/login.defs\"; then escaped_formatted_output=$(sed -e 's|/|\\\\/|g' <<< \"$formatted_output\") LC_",
+    "result": "fail",
+    "rule": "accounts_logon_fail_delay",
+    "oval_id": "xccdf_org.ssgproject.content_rule_accounts_logon_fail_delay",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "accounts_logon_fail_delay",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The remediation involves a simple configuration change to /etc/login.defs, a standard PAM-related setting. It follows typical STIG hardening patterns and does not risk lockout or service disruption.",
+    "requires_human_review": false,
+    "estimated_impact": "authentication/authorization affected; Potential for excessive delay causing user frustration if set too high",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "accounts_logon_fail_delay",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 21.126819133758545,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 5.077,
+          "review_qa_seconds": 16.047,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We must follow workflow: propose plan, call review_plan, then if approved execute.\n\nSo first: produce plan to modify /etc/login.defs, ensuring FAIL_DELAY is set. The initial comment says \"set properly... add or correct the FAIL_DELAY setting in /etc/login.defs to read as follows: FAIL_DELAY\". Possibly we need value. But according to rule, maybe value default? If they want to set to e.g. 5. But it's unclear: maybe set to 5? Or set to default? The recommendation says var_accounts_fail_delay='' but empty string? Perhaps placeholder means we need to set to something like 5 or 5? Actually the script placeholder: var_accounts_fail_delay='<value>'. In remediation scripts, it's usually set to \"5\" or \"10\". For logon failure delay, typical hardening expects a delay like 5 or 10. Should check: The STIG for login failure delay: set FAIL_DELAY = 5. So we plan to set to \"5\".\n\nThus plan: read /etc/login.defs, then use sed to either uncomment and set to 5, or add line.\n\nCommands: one at a time. We read_file, then if modification needed, use sed -i to modify. But we need to use run_cmd for sed. But we must not duplicate. So plan: 1) Read file. 2) If FAIL_DELAY line present (commented or uncommented), run sed to replace value to 5. 3) If not present, append line \"FAIL_DELAY 5\" to the file.\n\nSince we can't chain commands, we might need to check detection logic externally? But we just plan. In plan description, we can describe that we will do these steps. Use sed -i '/^FAIL_DELAY[[:space:]]/s/[0-9]*$/5/' etc. For commented line, we need to uncomment. sed: 's/^#\\s*FAIL_DELAY[[:space:]]\\+[0-9]\\+/FAIL_DELAY 5/'.\n\nIf not present, use echo.\n\nWill run.\n\nNow produce plan.\n\nThen call review_plan.\n\n",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "The sed command designed to replace a commented or uncommented FAIL_DELAY line preserves the comment marker if the line is commented. As a result, the resulting line may remain commented, leaving the setting ineffective. The plan also does not handle variations in whitespace or comments after the value, and assumes the file ends without trailing blank lines. Therefore, when executed as written, the remediation may fail to actually apply the required FAIL_DELAY setting.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "accounts_logon_fail_delay",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "The sed command designed to replace a commented or uncommented FAIL_DELAY line preserves the comment marker if the line is commented. As a result, the resulting line may remain commented, leaving the setting ineffective. The plan also does not handle variations in whitespace or comments after the value, and assumes the file ends without trailing blank lines. Therefore, when executed as written, the remediation may fail to actually apply the required FAIL_DELAY setting.",
+      "concerns": [
+        "Sed replacement keeps comment prefix for existing commented lines, resulting in a still\u2011commented line.",
+        "Does not remove comments that precede a line with spaces or tabs before the keyword.",
+        "Edge cases: multiple FAIL_DELAY entries, lines with inline comments, or unusual whitespace may not be correctly handled.",
+        "Relies on a non\u2011standard regex syntax that may not be portable across all sed variants.",
+        "Potentially leaves the file unchanged if the line is commented, thus not achieving the patch."
+      ],
+      "suggested_improvements": [
+        "Use a sed script that first removes any leading comment markers before replacing the value, e.g., `sed -i -E '/^#\\s*FAIL_DELAY[[:space:]]*[^[:space:]]*/{s/^#\\s*//;s/FAIL_DELAY[[:space:]]*[^[:space:]]*/FAIL_DELAY 5/}' /etc/login.defs`.",
+        "Or perform two passes: `sed -i 's/^#\\s*FAIL_DELAY.*/FAIL_DELAY 5/'` followed by `sed -i 's/^\\s*FAIL_DELAY.*/FAIL_DELAY 5/'`.",
+        "Add a fallback append step with `grep -q '^\\s*FAIL_DELAY' /etc/login.defs || echo 'FAIL_DELAY 5' >> /etc/login.defs` to handle missing entries.",
+        "Use `printf` and a temporary file to ensure atomic update instead of in\u2011place editing in case of concurrent edits.",
+        "Run a post\u2011remediation verification script that checks `grep -q '^\\s*FAIL_DELAY[[:space:]]*5$' /etc/login.defs` to confirm correct value.",
+        "Include documentation or comments explaining why the change was made."
+      ],
+      "security_score": null,
+      "best_practices_followed": false
+    }
+  ]
+}

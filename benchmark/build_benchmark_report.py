@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Tuple
 
+EXCLUDED_MODELS = {"microsoft/phi-4"}
+
 
 def _f(x: object, default: float = 0.0) -> float:
     try:
@@ -109,6 +111,8 @@ def load_runs(input_dirs: List[Path], small_max: int, medium_max: int) -> List[R
             if not rows:
                 continue
             model = _model_name(rows[0], csv_path)
+            if model in EXCLUDED_MODELS:
+                continue
             found = len(rows)
             succ = sum(1 for r in rows if (r.get("final_status") or "").strip().lower() == "success")
             fail = found - succ
