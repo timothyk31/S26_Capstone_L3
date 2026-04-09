@@ -78,19 +78,36 @@ class FileLockManager:
         for p in new_paths:
             lk = self._get_lock(p)
             # Try non-blocking first to avoid the log message on uncontended locks
-            if not lk.acquire(blocking=False):
-                short = p.rsplit("/", 1)[-1]
+            if lk.acquire(blocking=False):
+                held.add(p)
+                continue
+            short = p.rsplit("/", 1)[-1]
+            try:
                 worker_print(
                     f"[bold yellow]  >> waiting on lock: {short}[/bold yellow]"
                 )
-                t0 = time.time()
-                lk.acquire()
-                wait = time.time() - t0
-                worker_print(
-                    f"[green]  >> lock acquired: {short} "
-                    f"(waited {wait:.1f}s)[/green]"
-                )
-            held.add(p)
+            except Exception:
+                pass
+            t0 = time.time()
+            acquired = lk.acquire(timeout=300)
+            if acquired:
+                held.add(p)
+                try:
+                    wait = time.time() - t0
+                    worker_print(
+                        f"[green]  >> lock acquired: {short} "
+                        f"(waited {wait:.1f}s)[/green]"
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    worker_print(
+                        f"[bold red]  >> lock timeout: {short} "
+                        f"(300s) — proceeding unprotected[/bold red]"
+                    )
+                except Exception:
+                    pass
 
     def _release_all(self) -> None:
         """Release every lock held by the current thread's session."""
