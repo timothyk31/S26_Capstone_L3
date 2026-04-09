@@ -617,6 +617,7 @@ def main() -> int:
     # Rule-name based skip set (stable across scans, unlike positional IDs)
     SKIP_RULE_IDS = {
         "accounts_passwords_pam_faillock_audit",
+        "accounts_passwords_pam_faillock_deny_root",  # Can lock out root account after failed attempts
         # SSH-related findings — remediation can break the active SSH session
         "sshd_use_approved_macs_ordered_stig",     # Configure SSH Server to Use FIPS 140-2 Validated MACs
         "sshd_approved_macs",                       # Configure SSH Client to Use FIPS 140-2 Validated MACs
@@ -632,6 +633,20 @@ def main() -> int:
         # PAM unix rounds — direct edits to authselect-managed PAM files break PAM auth and kill SSH
         "accounts_password_pam_unix_rounds_password_auth",
         "accounts_password_pam_unix_rounds_system_auth",
+        # Shell profile umask — bad writes corrupt /etc/bashrc or /etc/profile, breaking all subsequent SSH commands
+        "accounts_umask_etc_bashrc",
+        "accounts_umask_etc_csh_cshrc",
+        "accounts_umask_etc_profile",
+        "accounts_umask_etc_login_defs",
+        # SSSD rules — modifying SSSD config can break SSH authentication
+        "sssd_enable_certmap",
+        "sssd_certificate_verification",
+        "sssd_enable_smartcards",
+        # Additional sshd rules — restarting sshd with bad config kills SSH
+        "sshd_x11_use_localhost",
+        "sshd_disable_kerb_auth",
+        # PAM empty passwords — direct edits to authselect-managed PAM files
+        "no_empty_passwords",
         # Sudo/sudoers-related findings - remediation can break privileged access
         "selinux_context_elevation_for_sudo",       # Writes sudoers.d SELinux context rules
         "sudoers_validate_passwd",                  # Tightens sudoers Defaults policy
