@@ -629,6 +629,9 @@ def main() -> int:
         "sshd_enable_warning_banner",               # Enable SSH Warning Banner
         # Password aging — can immediately expire root password and lock out SSH
         "accounts_password_set_max_life_existing",  # chage -M on root with empty lastchg expires password instantly
+        # PAM unix rounds — direct edits to authselect-managed PAM files break PAM auth and kill SSH
+        "accounts_password_pam_unix_rounds_password_auth",
+        "accounts_password_pam_unix_rounds_system_auth",
         # Sudo/sudoers-related findings - remediation can break privileged access
         "selinux_context_elevation_for_sudo",       # Writes sudoers.d SELinux context rules
         "sudoers_validate_passwd",                  # Tightens sudoers Defaults policy
