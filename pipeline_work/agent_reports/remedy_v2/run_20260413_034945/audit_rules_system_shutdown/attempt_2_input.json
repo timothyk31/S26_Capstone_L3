@@ -1,0 +1,72 @@
+{
+  "vulnerability": {
+    "id": "audit_rules_system_shutdown",
+    "title": "Shutdown System When Auditing Failures Occur",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "If the auditd daemon is configured to use the augenrules program to read audit rules during daemon startup (the default), add the following line to to the bottom of a file with suffix .rules in the directory /etc/audit/rules.d: -f If the auditd daemon is configured to use the auditctl utility to read audit rules during daemon startup, add the following line to the bottom of the /etc/audit/audit.rules file: -f",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q audit && rpm --quiet -q kernel-core; then var_audit_failure_mode='' # Traverse all of: # # /etc/audit/audit.rules, (for auditctl case) # /etc/audit/rules.d/*.rules (for augenrules case) find /etc/audit /etc/audit/rules.d -maxdepth 1 -type f -name '*.rules' -exec sed -i '/-f[[:space:]]\\+.*/d' {} ';' for AUDIT_FILE in \"/etc/audit/audit.rules\" \"/etc/audit/rules.d/immutable.rules\" do echo '' >> $AUDIT_FILE echo '# Set the audit.rules configuration to halt system upon audit failure per security requirements' >> $AUDIT_FILE echo \"-f $var_audit_failure_mode\" >> $AUDIT_FILE done else >&2 echo 'Remediation is not applicable, nothing was done' fi",
+    "result": "fail",
+    "rule": "audit_rules_system_shutdown",
+    "oval_id": "xccdf_org.ssgproject.content_rule_audit_rules_system_shutdown",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain",
+    "group": "Configure auditd Rules for Comprehensive Auditing"
+  },
+  "triage_decision": {
+    "finding_id": "audit_rules_system_shutdown",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The finding describes a configuration where auditd is set to halt the system upon audit failure, which can lead to denial of service and loss of audit logs. This risk can be mitigated by adjusting the auditd configuration to not halt the system, making it a remediable issue.",
+    "requires_human_review": false,
+    "estimated_impact": "audit failure leads to system shutdown; denial of service; loss of audit logging",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "audit_rules_system_shutdown",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": "Single-rule scan failed for audit_rules_system_shutdown (rule=xccdf_org.ssgproject.content_rule_audit_rules_system_shutdown). Could not verify.",
+      "attempt_duration": 9.347508192062378,
+      "scan_duration": 0.102,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "**Remediation Steps**\n\n1. Change the auditd configuration to use the `auditctl` utility instead of the default `augenrules`.  \n   Edit `/etc/sysconfig/auditd` and set the `OPTIONS` variable to point at the audit rules file used by `auditctl`:\n\n   ```bash\n   sudo sed -i 's/^OPTIONS=\"--augenrules\"/OPTIONS=\"-l \\/etc\\/audit\\/audit.rules\"/' /etc/sysconfig/auditd\n   ```\n\n   If the line does not exist, add it:\n\n   ```bash\n   sudo sh -c 'echo '\\''OPTIONS=\"-l \\/etc\\/audit\\/audit.rules\"'\\'' >> /etc/sysconfig/auditd'\n   ```\n\n2. (Optional but recommended) Restart the auditd service so the new setting takes effect:\n\n   ```bash\n   sudo systemctl restart auditd\n   ```\n\n**Explanation**\n\n- The finding reports that `auditd` is configured to use the `augenrules` plugin, which causes the system to halt on audit failure.  \n- By changing `OPTIONS` in `/etc/sysconfig/auditd` from `\"--augenrules\"` to `\"-l /etc/audit/audit.rules\"`, the daemon will instead read its rules from `/etc/audit/audit.rules` (the file used when `auditctl` is employed).  \n- This aligns with the recommendation in the finding: *\u201cIf the auditd daemon is configured to use the auditctl utility to read audit rules during daemon startup, add the following line to the bottom of the /etc/audit/audit.rules file: -f\u201d* \u2013 i.e., use the `auditctl` path.  \n- After the change, a restart of the auditd service ensures the new configuration is loaded, eliminating the unsafe halt\u2011on\u2011audit\u2011failure behavior.  \n\nThese steps satisfy the required remediation for the audit_rules_system_shutdown finding.",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 5,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 9.336,
+          "review_qa_seconds": 0.0,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 0,
+        "review_plan_capped": false
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to fix the finding: audit_rules_system_shutdown. The auditd daemon is configured to halt the system upon audit failure via augenrules reading audit rules during startup. The recommendation: To mitigate, we need to change auditd to use auditctl utility instead of augenrules, i.e., replace the line in /etc/audit/rules.d with -f using auditctl.\n\nThus we need to edit the file /etc/audit/rules.d (likely a file like /etc/audit/rules.d/*.rules) but the finding says: add the following line to the bottom of a file with suffix .rules in the directory /etc/audit/rules.d: -f If the auditd daemon is configured to use the auditctl utility to read audit rules during daemon startup, add the following line to the bottom of the /etc/audit/audit.rules file: -f\n\nSo we need to ensure auditd uses auditctl not augenrules. That likely means we need to edit /etc/sysconfig/auditd or /etc/audit/auditd.conf? Actually auditd configuration: The auditd daemon reads rules from /etc/audit/rules.d/*.rules if using augenrules, or from /etc/audit/audit.rules if using auditctl. So to make auditd use auditctl, we need to set the auditd config to use auditctl instead of augenrules. In RHEL, the file /etc/sysconfig/auditd contains OPTIONS=\"-l /etc/audit/audit.rules\" for auditctl, or OPTIONS=\"--augenrules\" for augenrules. Let's check: In RHEL 8, auditd reads /etc/audit/rules.d if using augenrules, else uses /etc/audit/audit.rules if using auditctl. The configuration is in /etc/sysconfig/auditd: there is a variable: OPTIONS=\"--augenrules\" or OPTIONS=\"-l /etc/audit/audit.rules\". So we need to change OPTIONS to \"-l /etc/audit/audit.rules\". Then the auditd will read audit rules from /etc/audit/audit.rules. That satisfies the fix: add line to bottom of /etc/audit/audit.rules file? Actually the finding says: add the following line to the bottom of the /etc/audit/audit.rules file: -f. But the -f flag is to fail on audit failure? Wait: The line to add is \"-f\"? In audit rules syntax, \"-f\" means \"fail\"? Actually audit rules language: actions: \"always,never,exit,wait,...\". The \"-f\" action means \"fail\"? I recall that audit rules have actions like \"always, never, exit, wait, ...\" and also \"audit\" maybe? Let's verify: audit rules syntax: action can be \"always\", \"never\", \"exit\", \"wait\", \"signal\", \"iot\", \"ignore\", \"audit\", \"etc\". Actually I think there is an action \"audit\" to generate an audit record. But \"-f\" might be a typo. However the recommendation from the finding: \"add the following line to the bottom of the /etc/audit/audit.rules file: -f\". That seems odd. Maybe they want to add a line: \"-f\" meaning \"fail\"? Actually the audit rule to cause system shutdown on audit failure is: \"action=halt\"? Wait, there is an action \"halt\"? Not sure. But the finding description: \"If the auditd daemon is configured to use the augenrules program to read audit rules during daemon startup (the default), add the following line to the bottom of a file with suffix .rules in the directory /etc/audit/rules.d: -f\". This suggests that we need to add a line with \"-f\" to the .rules file under /etc/audit/rules.d when using augenrules. Conversely, if using auditctl, we add line to /etc/audit/audit.rules with \"-f\". So the fix depends on which method auditd uses. The finding says the auditd is configured to use augenrules (the default). So we need to change to use auditctl. So we need to modify /etc/sysconfig/auditd to change OPTIONS from \"--augenrules\" to \"-l /etc/audit/audit.rules\". Also we might need to ensure that the /etc/audit/audit.rules file exists and maybe add a line \"-f\" (though unclear). However the remediation: we just need to fix the configuration so that auditd uses auditctl, not augenrules. So answer: edit /etc/sysconfig/auditd.\n\nThus we will provide a fix: set OPTIONS=\"-l /etc/audit/audit.rules\" in /etc/sysconfig/auditd, and optionally ensure that the auditd service is restarted.\n\nWe'll output the commands needed.\n\n",
+          "content": "**Remediation Steps**\n\n1. Change the auditd configuration to use the `auditctl` utility instead of the default `augenrules`.  \n   Edit `/etc/sysconfig/auditd` and set the `OPTIONS` variable to point at the audit rules file used by `auditctl`:\n\n   ```bash\n   sudo sed -i 's/^OPTIONS=\"--augenrules\"/OPTIONS=\"-l \\/etc\\/audit\\/audit.rules\"/' /etc/sysconfig/auditd\n   ```\n\n   If the line does not exist, add it:\n\n   ```bash\n   sudo sh -c 'echo '\\''OPTIONS=\"-l \\/etc\\/audit\\/audit.rules\"'\\'' >> /etc/sysconfig/auditd'\n   ```\n\n2. (Optional but recommended) Restart the auditd service so the new setting takes effect:\n\n   ```bash\n   sudo systemctl restart auditd\n   ```\n\n**Explanation**\n\n- The finding reports that `auditd` is configured to use the `augenrules` plugin, which causes the system to halt on audit failure.  \n- By changing `OPTIONS` in `/etc/sysconfig/auditd` from `\"--augenrules\"` to `\"-l /etc/audit/audit.rules\"`, the daemon will instead read its rules from `/etc/audit/audit.rules` (the file used when `auditctl` is employed).  \n- This aligns with the recommendation in the finding: *\u201cIf the auditd daemon is configured to use the auditctl utility to read audit rules during daemon startup, add the following line to the bottom of the /etc/audit/audit.rules file: -f\u201d* \u2013 i.e., use the `auditctl` path.  \n- After the change, a restart of the auditd service ensures the new configuration is loaded, eliminating the unsafe halt\u2011on\u2011audit\u2011failure behavior.  \n\nThese steps satisfy the required remediation for the audit_rules_system_shutdown finding."
+        }
+      ]
+    }
+  ],
+  "review_feedback": null,
+  "plan_text": null,
+  "previous_review_verdicts": []
+}
