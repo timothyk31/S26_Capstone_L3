@@ -1,0 +1,84 @@
+{
+  "vulnerability": {
+    "id": "mount_option_home_noexec",
+    "title": "Add noexec Option to /home",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "The noexec mount option can be used to prevent binaries from being executed out of /home. Add the noexec option to the fourth column of /etc/fstab for the line which controls mounting of /home.",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if ( ! ( { rpm --quiet -q kernel-core ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} && ([ -f /run/ostree-booted ] || [ -L /ostree ]) ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ); then function perform_remediation { # the mount point /home has to be defined in /etc/fstab # before this remediation can be executed. In case it is not defined, the # remediation aborts and no changes regarding the mount point are done. mount_point_match_regexp=\"$(printf \"^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]\" \"/home\")\" grep \"$mount_point_match_regexp\" -q /etc/fstab \\ || { echo \"The mount point '/home' is not even in /etc/fstab, so we can't set up mount options\" >&2; echo \"Not",
+    "result": "fail",
+    "rule": "mount_option_home_noexec",
+    "oval_id": "xccdf_org.ssgproject.content_rule_mount_option_home_noexec",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "mount_option_home_noexec",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "Adding the noexec option to /home is a standard hardening practice that does not affect authentication, networking, or critical services. It only prevents execution of binaries from /home, which is expected and unlikely to cause lockout or system breakage.",
+    "requires_human_review": false,
+    "estimated_impact": "filesystems affected; Potential disruption of user-installed binaries that rely on execution from /home",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "mount_option_home_noexec",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 57.973124980926514,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 18.42,
+          "review_qa_seconds": 39.552,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to produce plan, call review_plan. Provide full plan to modify /etc/fstab for /home.\n\nWe must read file, modify line. The rule says add 'noexec' to options column (fourth field). The existing fstab line might look like: \n\n/home        /home        ext4   defaults,relatime   0   2\n\nWe need to ensure noexec is present. If options field contains other options, add noexec separated by comma. If no options or defaults, replace defaults with defaults,noexec? Actually coverage: if default includes 'defaults', adding noexec means options=defaults,noexec. Also preserve existing options and add noexec.\n\nWe also must not duplicate lines.\n\nApproach: read_file /etc/fstab, parse with sed. We can: if line matches ^\\s*/home\\s+\\/home\\s+, we modify.\n\nUsing sed: find columns. The command: sed -i -e '/^.*\\s\\/home\\s\\+\\/home\\s\\+.*$/ s/ \\([^ ]\\{1,\\}\\)$/ \\1,noexec/' might be too complex. We can approach simpler: use awk to reconstruct.\n\nBut we can use grep to check if /home line contains 'noexec', if yes skip.\n\nCheck lines: run_cmd grep -qE '^[^#]*\\s+/home\\s+' ...? If no exec then modify.\n\nWe should ensure not to modify other lines.\n\nSimpler: create variable fstab content. Then write processed content.\n\nTo avoid multiple commands, we can use read_file get content; process in Python? but not allowed. Only use run_cmd and read_file/write_file. We cannot run python script. Could use shell to process inside a single command? But must be single command. We can use a multi-line cmd? They said \"Do NOT chain with && ; or multiline scripts.\" That implies single command string.\n\nBut we might use awk within single command. Eg:\n\nsed -i '/^[^#]*\\s\\/home\\s\\+\\/home\\b/ s/\\\\(\\\\s[^ ]\\\\+\\\\)\\\\b/\\\\1,noexec/' /etc/fstab\n\nBut must ensure correct.\n\nAlternate: first check if /home line contains 'noexec'; if yes nothing.\n\nWe need review plan first. So propose plan:\n\n1. read /etc/fstab to see if /home line has noexec.\n\n2. If not, modify by adding noexec to options column: if line already has options column with something, insert noexec at end if not already there.\n\nWe must explain commands.\n\nIn plan: Use `read_file` to get /etc/fstab content for review. Then run `sed -i '/^\\\\s*\\\\/home\\\\s\\\\+\\\\/home\\\\s/ s/\\\\([^ ]*\\\\)\\\\s\\\\+\\\\([^ ]*\\\\)\\\\s\\\\+\\\\([^ ]*\\\\)\\\\s\\\\+\\\\([^ ]*\\\\)\\\\s\\\\+/\\\\1 \\\\2 \\\\3, noexec \\\\4/' /etc/fstab` ?\n\nBut need correct sed for columns.\n\nBetter: Use `awk` to rebuild. Command:\n\nawk -F'[: \\t]+' '{\n  if ($1 ~ /^#/) {print}\n  else if ($1 ~ /[^]+/ && $2 ~ /^[^]+$/) { # skip\n  } else {\n     if ($1 ~ /\\\\/home/ && $2 ~ /\\\\/home/) {\n         options=$4\n         if (options ~ /noexec/) print\n         else print $0\",\"noexec\"\"\n     } else {print}\n  }\n}' /etc/fstab > /tmp/tmpfstab && mv /tmp/tmpfstab /etc/fstab\n\nBut that's multiple commands? It's one command string. It's using shell pipeline? We can use single command: `awk ... /etc/fstab | sponge /etc/fstab`. But sponge may not exist. Use `tee` though? \"Kill?\".\n\nWe need to update file in place by reading then writing.\n\nWe could use `sed -i` with regex.\n\nLet's propose sed that works for typical fstab line:\n\n`sed -i '/^[^#]*\\s\\/home\\s\\+\\/home\\b/ s/^\\([^ ]*\\s\\+[^ ]*\\s\\+[^ ]*\\s\\+[^ ]*\\)\\b\\(.*\\)/\\1\\2,noexec/' /etc/fstab`\n\nHmm.\n\nSimplify: We'll use `sed -i '/^[^#]*\\s\\/home\\s\\+\\/home\\b/ s/noexec//g; s/,$//'`? Not good.\n\nMaybe easier: Use `crudini`? Not available.\n\nWe also can just append `,noexec` if not present.\n\nFactor: gawk maybe.\n\nLet's produce plan to use `awk` as shown; that is one command. That will rewrite file fully.\n\nWrite plan: open /etc/fstab. For each line, if line contains '/home' as mount point (checking second field?), process. We'll compute new options.\n\nWe will produce final plan: read_file first to ensure presence of /home line. Then run command to modify. Actually we could just run command and let sed/awk find it. But requirement: always read_file before modifying. So need to read file then proceed. But reading file is step; we have read_file tool call. Then after reading file, we can unconditionally run run_cmd that modifies in place. That's allowed.\n\nThus plan:\n\n1. read_file /etc/fstab.\n\n2. If backing up? Not necessary; we modify directly.\n\n3. Use awk in run_cmd to process.\n\nCommand string:\n\nawk 'BEGIN{OFS=\"\\t\"}{if($2==\"/home\" && $1==\"/home\" && $4 !~ /noexec/){options=$4; sub(/,?$/,\",noexec\",options); print $1,$2,$3,options,$5,$6; next} print $0}' /etc/fstab > /tmp/fstab && mv /tmp/fstab /etc/fstab\n\nBut we cannot use temp file? we can but using sed -i? Might spawn temp file. Acceptable.\n\nThe command uses output redirect and mv, no sed. But could use \"sed -i\" which directly edits file. But sed may not easily handle optional insertion.\n\nMaybe use `ed` script.\n\nAlternatively, use `perl -0777 -p -i -e`. Use perl inline. That might produce correct modifications.\n\nWe can commit to run_cmd that uses `perl`:\n\nperl -0777 -p -i -e 's{^(?!#)(\\S+\\s+\\S+\\s+\\S+\\s+)([^,\\n]*)(?<!noexec)}{ \"$1$2,noexec\" }mg' /etc/fstab\n\nBut we need to match line where second field is '/home'.\n\nMaybe:\n\nperl -0777 -p -i -e '/^\\s*[^#].*\\s+\\/home\\b/ && !/noexec/ && s{(\\s+[^#]*?)$}{$1,noexec}' /etc/fstab\n\nLet's construct:\n\nperl -0777 -p -i -e '\n  if (/^[^#]*\\s+\\/home\\b/) {\n    if (!/noexec/) {\n      s{(\\s+[^#]*?)$}{$1,noexec}\n    }\n  }\n' /etc/fstab\n\nThis will add noexec at end of line if not present. But if options column contains others, we might end up with noexec appended but not separated by comma? Provided we had options skip 'noexec', we add at end; nothing else. But we need to insert comma if other options present. But this code adds comma before noexec regardless? It just adds noexec as is; if there is no trailing comma, then it will be appended with noexec but missing comma. The pattern adds comma if captured group suffix doesn't include it. We need to check.\n\nUse regex: capture trailing options part, then if options end with comma or nothing? Actually we want to add comma before noexec. Suppose line options is defaults,relatime . Our action: s{(\\s+[^#]*?)$}{$1,noexec} . So the captured group is space then whatever last field. Suppose last field 'defaults,relatime 0 2', captured group includes leading space plus whatever up to end. Adding ,noexec will produce ' defaults,relatime,noexec'. Note that no comma before noexec? actually we added ,noexec after the options. So now options become defaults,relatime,noexec. That is fine.\n\nIf options is 'noexec' already, we skip due to !/noexec/. Good.\n\nIf options is 'noexec' only? That case? We skip. If options is ' defaults' (space before defaults) we still add noexec after defaults: ' defaults,noexec'. Good.\n\nEdge: if options was empty (empty options column)? Fstab syntax usually has at least default 'defaults'. If empty, field may be blank? But you rarely see empty; anyway would still add noexec.\n\nThus perl command is fine.\n\nSo plan:\n\n1. read_file /etc/fstab.\n\n2. If not present mount line? We'll just modify.\n\n3. Use run_cmd with above perl command.\n\nWe must keep file mode unchanged: we can use \"perl -i\" without mode so original permissions preserved.\n\nFinalize plan. Then call review_plan.\n\nOk.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "Review output was not valid JSON. Raw: {\"finding_id\":\"mount_option_home_noexec\",\"is_optimal\":false,\"approve\":false,\"feedback\":\"The plan modifies /etc/fstab to add noexec, but does not remount /home, so the current erroneous mount remains a...",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "mount_option_home_noexec",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "Review output was not valid JSON. Raw: {\"finding_id\":\"mount_option_home_noexec\",\"is_optimal\":false,\"approve\":false,\"feedback\":\"The plan modifies /etc/fstab to add noexec, but does not remount /home, so the current erroneous mount remains a...",
+      "concerns": [
+        "Could not parse LLM response"
+      ],
+      "suggested_improvements": [],
+      "security_score": null,
+      "best_practices_followed": false
+    }
+  ]
+}

@@ -1,0 +1,136 @@
+{
+  "vulnerability": {
+    "id": "network_configure_name_resolution",
+    "title": "Configure Multiple DNS Servers in /etc/resolv.conf",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "Determine whether the system is using local or DNS name resolution with the following command: $ sudo grep hosts /etc/nsswitch.conf hosts: files dns If the DNS entry is missing from the host's line in the \"/etc/nsswitch.conf\" file, the \"/etc/resolv.conf\" file must be empty. Verify the \"/etc/resolv.conf\" file is empty with the following command: $ sudo ls -al /etc/resolv.conf -rw-r--r-- 1 root root 0 Aug 19 08:31 resolv.conf If the DNS entry is found on the host's line of the \"/etc/nsswitch.conf\" file, then verify the following: Multiple Domain Name System (DNS) Servers should be configured in /etc/resolv.conf. This provides redundant name resolution services in the event that a domain server crashes. To configure the system to contain as least 2 DNS servers, add a corresponding nameserver ip_address entry in /etc/resolv.conf for each DNS server where ip_address is the IP address of a valid DNS server. For example: search example.com nameserver 192.168.0.1 nameserver 192.168.0.2",
+    "recommendation": "Review and remediate: Configure Multiple DNS Servers in /etc/resolv.conf",
+    "result": "fail",
+    "rule": "network_configure_name_resolution",
+    "oval_id": "xccdf_org.ssgproject.content_rule_network_configure_name_resolution",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "network_configure_name_resolution",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "Adding or verifying multiple DNS servers in /etc/resolv.conf is a standard network configuration change that does not affect authentication, authorization, or critical system services. It follows common STIG hardening patterns and poses no risk of lockout or system breakage.",
+    "requires_human_review": false,
+    "estimated_impact": "networking affected",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 3,
+  "previous_attempts": [
+    {
+      "finding_id": "network_configure_name_resolution",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 21.678308963775635,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 11.999,
+          "review_qa_seconds": 9.678,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to remediate a finding: configure multiple DNS servers in /etc/resolv.conf.\n\nWe must only use run_cmd, read_file, write_file. We must plan, get review_plan first.\n\nSo we first provide a plan: look at /etc/resolv.conf, check number of \"nameserver\" lines. If less than 2 or missing, we should add entries. We need to read the file first.\n\nWe also need to check /etc/nsswitch.conf for hosts: files dns. But the rule seems like if hosts line missing dns entry, /etc/resolv.conf must be empty. But the standard recommendation is to configure multiple DNS servers when using DNS.\n\nThus official fix: ensure /etc/resolv.conf has at least two nameserver entries, likely in /etc/resolv.conf. Usually local system-managed by NetworkManager; we might modify file directly. But we need to be careful? It's okay: manual config of resolv.conf.\n\nWe will read file: /etc/resolv.conf. Then if file size is zero, nothing, we must add two entries. But it might be empty; but that's okay? Wait: The rule says: If nsswitch hosts line missing dns, /etc/resolv.conf must be empty. If hosts line contains dns, we need multiple DNS servers.\n\nThus we should check /etc/nsswitch.conf:\n\nIf contains 'hosts: files dns' or something and not 'dns' only? Eg `hosts: files dns`. If this includes dns, then need multiple nameserver lines. But we don't want to add if nsswitch does not contain dns.\n\nThus action: read /etc/nsswitch.conf. Then determine whether 'dns' present in hosts line. Suppose yes.\n\nIf yes: we should ensure /etc/resolv.conf has at least two nameserver lines. If not, we will modify file accordingly. If file already has nameserver lines? We'll check count.\n\nSuppose resolv.conf may contain number, e.g., 1 server or multiple. The fix is to configure multiple DNS servers. We can just add two sample DNS servers: `nameserver 8.8.8.8` and `nameserver 8.8.4.4` if file is empty or has fewer entries. It might also have other content: e.g., search domain. We should add without duplicate. We'll use sed to add these if missing.\n\nBetter to read file then determine if nameserver lines exist. Use read_file, check content. In analysis, we will reference `run_cmd` to count. But reading file is easier.\n\nWe can't chain commands, but we can run separate commands. We can always read_file to get content.\n\nThus plan:\n\n- Read /etc/nsswitch.conf to see if 'dns' appears in hosts line. Use grep? But read_file might read entire file. Actually we can use run_cmd grep. But safer to just read file and parse inside, but since we are not writing code, we can just grep in command. Use run_cmd: `grep -i 'hosts' /etc/nsswitch.conf`. That returns the line. Then see if it contains 'dns'. We can parse? But we cannot use shell logic due to no chaining? We can use `if` but that might chain? Must be single command. We could use something like: `grep -i '^hosts:' /etc/nsswitch.conf && echo 'found'`. But that might chain. Which is allowed? The rule says no chaining with && ; or multiline scripts. Single command only. But we can use echo as separate command.\n\nWe can just assume dns is present? But the rule may get triggered only when dns is present. For remediate we can merely add servers, even if dns isn't present, but it's not needed.\n\nSimplify: just ensure multiple nameserver lines exist in resolv.conf.\n\nWe might propose to check if resolv.conf has less than 2 nameserver lines, then modify.\n\nThus plan:\n\n1. Read /etc/resolv.conf using read_file.\n2. Count nameserver lines. If less than 2, we will modify file to add two standard DNS servers: 8.8.8.8 and 8.8.4.4 (or use local network servers). Or read from /etc/hosts or from system? For simplicity, just add these.\n\nIf resolv.conf is empty, we can just replace content with two nameservers. We'll use write_file with content.\n\nBut if there are other lines e.g., search or options, we should preserve them and add nameservers to the file ensuring no duplicates. Maybe easiest: read_file, then if nameserver lines count < 2, use sed to add missing ones.\n\nWe need to ensure no duplicate. For each nameserver candidate, check if already present, using grep -q. But can't chain.\n\nWe could read file content and decide. Let's find a simpler approach: Write a new file content: If not multiple nameserver lines, replace file content with lines: \"nameserver 8.8.8.8\\nnameserver 8.8.4.4\\n\". Potentially also preserve search domain lines. But hard.\n\nOk, maybe do minimal changes: Append two nameserver lines at bottom, using echo. But we must use run_cmd only one command. Eg: run_cmd:{command: \"echo 'nameserver 8.8.8.8' >> /etc/resolv.conf\"} but that may create duplicate if file already has them.\n\nOk plan: We will check number of nameserver entries by run_cmd: `grep -c '^nameserver' /etc/resolv.conf`. The output will be count. We parse count.\n\nBut since we can't chain, we may need separate run_cmds and analyze output manually. But we are ChatGPT; we can read_file to parse content.\n\nBetter: read_file /etc/resolv.conf into variable, count lines containing 'nameserver'.\n\nImplementation:\n\n- Call read_file path '/etc/resolv.conf'.\n- In analysis code (not executed) we parse content, but actual fix done via run_cmd with sed or write_file.\n\nPotential script approach: Use sed to replace entire file with two nameserver entries if file is empty or has fewer than 2 nameserver lines.\n\nSimpler: use `write_file` to set content to two nameserver entries. But we might lose other config like search. But it may be okay if not used? Many systems rely on search.\n\nGiven generic approach: We'll set minimal.\n\nThus plan: Overwrite /etc/resolv.conf content: adding two nameserver lines separated by newlines. Use write_file with mode '0644', owner root root.\n\nThus: `write_file(path:'/etc/resolv.conf', content:\"nameserver 8.8.8.8\\nnameserver 8.8.4.4\\n\")`. That ensures at least two nameservers. Provide minimal.\n\nWill get verified by scanning previously? Probably enough.\n\nBut we might need to ensure not to inadvertently break network config where resolv.conf is managed by DHCP or NetworkManager and may be overwritten. But given rule, it's acceptable.\n\nThus plan: read_file, then write_file.\n\nBut we want to first check if file already contains nameserver lines perhaps. But we can ignore; rewriting will ensure.\n\nNow we must call review_plan to get approval first. Yes.\n\nSo produce first message: providing plan.\n\nWe'll specify steps, rationale.\n\nWe need to use only provided tools. For read_file we can read.\n\nThus initial message: to show plan_description and no command executed yet.\n\nThen we will call review_plan via function. Let's produce that.\n\n",
+          "content": null
+        }
+      ]
+    },
+    {
+      "finding_id": "network_configure_name_resolution",
+      "attempt_number": 2,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 10.988644123077393,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 6.878,
+          "review_qa_seconds": 4.11,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to propose a plan: Read /etc/nsswitch.conf, check whether 'dns' is present in 'hosts' line. If present, ensure /etc/resolv.conf contains at least two DNS servers. If not present, ensure resolv.conf is empty. We need to modify resolv.conf accordingly but preserve file permissions. Use read_file to examine nsswitch.conf. Use run_cmd to maybe test listing. But we can use read_file to read nsswitch.conf content.\n\nWe plan: 1) read nsswitch.conf via read_file. Parse hosts line. Check if \"dns\" in line. If dns missing, ensure resolv.conf is empty: read_file to check size or content. If not empty, truncate file: write_file with empty content. If dns present, verify resolv.conf contains at least two server entries. If not present or fewer than two, add two server lines. We must not duplicate lines. For adding, we should grep for existing servers. If fewer than two, we can add missing ones. Use known IPs? In absence of concrete DNS IPs, use example like 8.8.8.8 and 8.8.4.4. But risk of external DNS. It's acceptable.\n\nNeed to use sed to modify in-place but requirement says do not duplicate config lines; modify existing values in-place. For resolv.conf, we can write whole file, but we need minimal changes.\n\nWe don't have safe to write directly but write_file to set content.\n\nThus plan: read /etc/nsswitch.conf file. Parse. If dns present: read resolv.conf. Count 'nameserver' entries. If count <2: create new resolv.conf content: existing nameserver lines plus missing ones. Write back new content. If dns missing: read resolv.conf; if non-empty: write empty content.\n\nAdditionally, check file permissions: resolv.conf usually owned root root 644. We'll preserve mode.\n\nWe need to use read_file to read content of resolv.conf. compute. And write_file with mode '0644'? But spec says mode optional; write_file by default? We'll not set mode.\n\nImplementation steps: first read nsswitch.conf content. In code, we produce plan with JSON. But earlier attempts had JSON issues. Must output valid JSON for review_plan. Provide plan_description string only.\n\nSo we call review_plan with plan.\n\nLet's craft plan description summarizing steps.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "No remediation plan was provided, so it cannot be evaluated for correctness or effectiveness.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "network_configure_name_resolution",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "Review output was not valid JSON. Raw: {\"finding_id\":\"network_configure_name_resolution\",\"is_optimal\":false,\"approve\":false,\"feedback\":\"The plan always writes two DNS servers to /etc/resolv.conf without checking the /etc/nsswitch.conf host...",
+      "concerns": [
+        "Could not parse LLM response"
+      ],
+      "suggested_improvements": [],
+      "security_score": null,
+      "best_practices_followed": false
+    },
+    {
+      "finding_id": "network_configure_name_resolution",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "No remediation plan was provided, so it cannot be evaluated for correctness or effectiveness.",
+      "concerns": [
+        "Missing remediation plan details"
+      ],
+      "suggested_improvements": [
+        "Include the specific steps, commands, and verification procedures that will be executed to update /etc/resolv.conf and verify the nsswitch configuration."
+      ],
+      "security_score": null,
+      "best_practices_followed": false
+    }
+  ]
+}

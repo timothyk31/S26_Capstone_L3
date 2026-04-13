@@ -1,0 +1,84 @@
+{
+  "vulnerability": {
+    "id": "accounts_password_pam_lcredit",
+    "title": "Ensure PAM Enforces Password Requirements - Minimum Lowercase Characters",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "The pam_pwquality module's lcredit parameter controls requirements for usage of lowercase letters in a password. When set to a negative number, any password will be required to contain that many lowercase characters. When set to a positive number, pam_pwquality will grant +1 additional length credit for each lowercase character. Modify the lcredit setting in /etc/security/pwquality.conf to require the use of a lowercase character in passwords.",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core && { rpm --quiet -q libpwquality; }; then var_password_pam_lcredit='' if grep -sq lcredit /etc/security/pwquality.conf.d/*.conf ; then sed -i \"/lcredit/d\" /etc/security/pwquality.conf.d/*.conf fi # Strip any search characters in the key arg so that the key can be replaced without # adding any search characters to the config file. stripped_key=$(sed 's/[\\^=\\$,;+]*//g' <<< \"^lcredit\") # shellcheck disable=SC2059 printf -v formatted_output \"%s = %s\" \"$stripped_key\" \"$var_password_pam_lcredit\" # If the key exists, change it. Otherwise, add it to the config_file. # We search for the key string followed by a word boundary (matched by \\>), # so if we search for 'setting', 'setting2' won't match. if LC_ALL=C grep -",
+    "result": "fail",
+    "rule": "accounts_password_pam_lcredit",
+    "oval_id": "xccdf_org.ssgproject.content_rule_accounts_password_pam_lcredit",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "accounts_password_pam_lcredit",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The change is a standard PAM password policy adjustment that does not affect system services or user authentication mechanisms beyond password complexity. It follows typical STIG hardening patterns and is unlikely to cause lockout or breakage.",
+    "requires_human_review": false,
+    "estimated_impact": "authentication/authorization affected; Password policy enforcement",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "accounts_password_pam_lcredit",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 41.66834092140198,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 37.005,
+          "review_qa_seconds": 4.662,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to remediate a single OpenSCAP finding on Rocky Linux 10. The finding is for PAM enforcing minimum lowercase characters, rule name accounts_password_pam_lcredit. We need to modify /etc/security/pwquality.conf or /etc/security/pwquality.conf.d/ .. The recommended script sets var_password_pam_lcredit=''? Actually the script missing the actual value; typical enforcement requires at least one lowercase letter, so lcredit = -1 (meaning require 1 lowercase). The recommendation says: \"Modify the lcredit setting in /etc/security/pwquality.conf to require the use of a lowercase character in passwords.\" So we need set lcredit = -1? Let's standard: lcredit = -1. So require at least 1 lowercase. We'll set /etc/security/pwquality.conf to have line \"lcredit = -1\". Or ensure it is not set to 0 or positive. If there are multiple config directories, we ignore.\n\nProcedure:\n\n1. Read /etc/security/pwquality.conf to see if lcredit set. Use read_file. If it contains the line, modify using sed, otherwise add.\n\n2. The rule script mentions reading /etc/security/pwquality.conf.d/*.conf. But maybe simpler: modify pwquality.conf.\n\nCrucial: use read_file before modifying. Use sed -i to modify lines. Should not add duplicate lines.\n\nUse modify steps: read file content. Check if line exists; If exists commented like '# lcredit = 0', uncomment and set to -1. If exists but value > -1? But we want at least -1.\n\nSpec: If line exists with any value, replace entire line. Use sed -i 's/^#\\?\\s*lcredit\\s*=.*$/lcredit = -1/'. If not exist, append line at end.\n\nSo the plan: read the file; use sed to modify; if file not contain lcredit, append.\n\nNeed to ensure we don't duplicate. Use command: sed -i '/^[ \\t]*#\\?\\s*lcredit\\s*=.*$/c\\lcredit = -1' file. But if not exist, we can add echo \"lcredit = -1\" >> file.\n\nBut we must run commands individually; cannot chain. So we require reading file via read_file. Then run a sed command.\n\nEdge: The command might attempt to modify nonexistent file.\n\nCheck if file /etc/security/pwquality.conf exists. It should exist. But check for existence.\n\nWe could just run sed directly.\n\nGiven the firewall and sshd_config not touched, we're safe.\n\nWe'll target /etc/security/pwquality.conf.\n\nPlan tasks:\n\n- Read file /etc/security/pwquality.conf\n- Pass content to see if lcredit line exists. But we can't parse or run code; but we can propose to run sed commands. Usually we run sed -i and check.\n\nSimpler: Run sed -i '/^[ \\t]*#\\?lcredit\\s*=.*$/c\\lcredit = -1' /etc/security/pwquality.conf\n\nThe sed command will replace any line starting with optional #, whitespace, lcredit = something. But if not exist, no change.\n\nThen we need to ensure line exists: we can check if lcredit not present. But we can just append the line unconditionally if not present. One way:\n\n`grep -q '^lcredit' /etc/security/pwquality.conf && true || echo 'lcredit = -1' >> /etc/security/pwquality.conf`\n\nCan't chain. So we'd need two commands: one for grep, then another for echo if not present. But we can't use if else in a single command.\n\nWe can just always append line after sed, but risk duplicate. Not allowed.\n\nAlternatively we can use a single sed that both replaces if exists or appends if not.\n\nUse sed with last line: e.g., `sed -i -e '/^[ \\t]*#\\?lcredit\\s*=.*$/c\\lcredit = -1' -e '$a\\lcredit = -1' /etc/security/pwquality.conf`. This would append regardless. Better: `sed -i -e '/^[ \\t]*#\\?lcredit\\s*=.*$/c\\lcredit = -1' -e '\\n'` Not good.\n\nWe could use sed that adds line only if not present: `sed -i '/^[ \\t]*#\\?lcredit\\s*=.*$/!$/a lcredit = -1' /etc/security/pwquality.conf`. But this will append an extra line after any line that is not a match, resulting possibly multiple duplicates. Not safe.\n\nSimplest: read the file first to see if lcredit exists. Then if not, append.\n\nWe can still do two commands: first run grep and check exit code. Then run echo if needed.\n\nBut run_cmd with a single command only, not a script. But we can chain multiple commands by separate calls. The problem: we cannot chain with &&. But we can call run_cmd twice: first for grep, capture exit code; but we cannot store exit code. However we can do logic outside? In the tool chain? The tool returns only stdout and exit code. So we could call run_cmd for grep and examine exit code. But we are not supposed to run logic after because we can't branch. But we can still call two commands: first grep, second echo. But if lcredit already exists, we will duplicate. We need to avoid duplication.\n\nTherefore better is to modify using sed that matches and replace; if not match, we can just ensure line exists using a separate check condition.\n\nSince we can't use if else in command, it's simpler to do: first run sed to replace any existing, then run grep -q for lcredit line; if no exit code 0, read file and append. But we can't decide after reading.\n\nBut we can run a command that appends the line only if it's not already there: `grep -q '^lcredit' /etc/security/pwquality.conf || echo 'lcredit = -1' >> /etc/security/pwquality.conf`. This is a single command with `||`. But rule says no chaining with && or ; or multiline. The `||` is allowed? There's not explicit prohibition. The line says: \"Do NOT chain with && or ; or multiline scripts.\" It doesn't mention `||`. But we can avoid using `||` and just call two separate commands: first grep, second echo if needed.\n\nBut how do we skip echo if grep succeeds? We can't conditionally skip. We might just always append a line; but risk duplicates. But we can check before appending that not already present. Could do: `grep -q '^lcredit = -1' /etc/security/pwquality.conf || echo 'lcredit = -1' >> /etc/security/pwquality.conf`. The `||` is still chain.\n\nAlternatively we choose the step-by-step approach: First we run sed to replace; then run a check to see if lcredit line exists with any value; if not, append default \"-1\". We can't use condition but we can check by running `grep -q '^lcredit' /etc/security/pwquality.conf || echo 'lcredit = -1' >> /etc/security/pwquality.conf`. That's still a single command with `||`. But that's considered chaining? The instructions forbid `&&` or `;` or multiline. It does not forbid `||`. However using `||` still is a chain. I'd be cautious; maybe just do sed and then always append \"lcredit = -1\" again on new line? But duplicate.\n\nWe can avoid duplicates by first reading file to see if line exists. Use read_file to extract content. Analyze if contains \"lcredit\". But we can't parse in user environment; we must produce macro logic. But we can rely that sed will replace any lines. If there is no existing line, we still need to add. To ensure uniqueness, we can rely on \"sed -i '/^[ \\t]*#\\?lcredit\\s*=.*/d' /etc/security/pwquality.conf\" to delete any line containing lcredit. Then echo \"lcredit = -1\" >> file. This will always add a line after potential deletion. Then duplication avoided. So we use two commands: first sed to delete any lcredit lines; second echo new line. That ensures unique entry. This is simpler.\n\nThus process:\n\n1. Ensure /etc/security/pwquality.conf exists. We'll assume exists. We'll read file first to show we see it.\n\n2. sed -i '/^[ \\t]*#\\?lcredit\\s*=.*/d' /etc/security/pwquality.conf\nThis deletes any lines with lcredit.\n\n3. echo 'lcredit = -1' >> /etc/security/pwquality.conf\n\nBut we must not duplicate if file had no lcredit. This approach still appends a new line, that's fine. No duplicate.\n\nWe also need to consider any config files in /etc/security/pwquality.conf.d/*.conf that set lcredit. However the original remediation script removed any lcredit lines there. But we are focusing on primary file. We could clear lcredit in all config directories, but not necessary for finding? Possibly but to ensure no override, we should delete lcredit lines in all *.conf files in /etc/security/pwquality.conf.d. That would be more extensive. But the rule might consider only primary file. But for thoroughness, we can also remove lcredit lines from the conf.d directory, and then after that create primary config.\n\nBut we can follow recommended script: they removed lines from /etc/security/pwquality.conf.d/*.conf, then set new value via formatted_output. But they didn't apply; the logic contained placeholers.\n\nWe can incorporate removal. Use sed on each file in the conf.d directory.\n\nWe can run `sed -i '/^[ \\t]*#\\?lcredit\\s*=.*/d' /etc/security/pwquality.conf.d/*.conf` - would delete from all files.\n\nNote: use wildcard expands locally. Might need shell expansion. We can run this as a single command; original instructions: commands as root; no sending to shell? But the shell will expand *.conf. That's fine.\n\nSo plan:\n\n- sed -i '/^[ \\t]*#\\?lcredit\\s*=.*/d' /etc/security/pwquality.conf.d/*.conf\n- sed -i '/^[ \\t]*#\\?lcredit\\s*=.*/d' /etc/security/pwquality.conf\n- echo 'lcredit = -1' >> /etc/security/pwquality.conf\n\nAll separate commands.\n\nWe should check file existence first, but assume present.\n\nSequence:\n\n1. run_cmd: sed -i '/^[ \\t]*#\\?lcredit\\s*=.*/d' /etc/security/pwquality.conf.d/*.conf\n\n2. run_cmd: sed -i '/^[ \\t]*#\\?lcredit\\s*=.*/d' /etc/security/pwquality.conf\n\n3. run_cmd: echo 'lcredit = -1' >> /etc/security/pwquality.conf\n\nBefore any, we should read /etc/security/pwquality.conf to inspect. That's optional but per rule: \"ALWAYS use read_file to inspect the target config file BEFORE modifying it.\" So we should call read_file before modifying /etc/security/pwquality.conf. Not needed for conf.d files, but maybe still. We need to read file to show. So we'll read /etc/security/pwquality.conf first. Then modify.\n\nSo plan files: /etc/security/pwquality.conf and /etc/security/pwquality.conf.d/*.conf.\n\nCommands: read_file; run sed; run sed; run echo.\n\nSequence: read_file of primary file; then run sed on conf.d; run sed on primary; echo.\n\nThat is 4 commands.\n\nNow per process: we must talk about plan. Provide plan description, then call review_plan. After approved, execute commands sequentially.\n\nThus we need to call review_plan first. Provide plan description:\n\n- Use sed to delete any lines containing lcredit in all conf.d files.\n- Use sed to delete any lines containing lcredit in the primary pwquality.conf.\n- Append \"lcredit = -1\" to the primary pwquality.conf.\n- Use read_file before modifications to check current config.\n\nMake the justification.\n\nOk.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "Review output was not valid JSON. Raw: {\"finding_id\":\"accounts_password_pam_lcredit\",\"is_optimal\":false,\"approve\":true,\"feedback\":\"The plan correctly enforces one lowercase character requirement by setting lcredit = -1 and removes any conf...",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "accounts_password_pam_lcredit",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "Review output was not valid JSON. Raw: {\"finding_id\":\"accounts_password_pam_lcredit\",\"is_optimal\":false,\"approve\":true,\"feedback\":\"The plan correctly enforces one lowercase character requirement by setting lcredit = -1 and removes any conf...",
+      "concerns": [
+        "Could not parse LLM response"
+      ],
+      "suggested_improvements": [],
+      "security_score": null,
+      "best_practices_followed": false
+    }
+  ]
+}
