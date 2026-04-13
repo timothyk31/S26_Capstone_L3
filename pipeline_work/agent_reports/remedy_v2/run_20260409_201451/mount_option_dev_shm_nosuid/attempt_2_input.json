@@ -1,0 +1,93 @@
+{
+  "vulnerability": {
+    "id": "mount_option_dev_shm_nosuid",
+    "title": "Add nosuid Option to /dev/shm",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "The nosuid mount option can be used to prevent execution of setuid programs in /dev/shm. The SUID and SGID permissions should not be required in these world-writable directories. Add the nosuid option to the fourth column of /etc/fstab for the line which controls mounting of /dev/shm.",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if ( ! ( { rpm --quiet -q kernel-core ;} && { rpm --quiet -q rpm-ostree ;} && { rpm --quiet -q bootc ;} && { ! rpm --quiet -q openshift-kubelet ;} && ([ -f /run/ostree-booted ] || [ -L /ostree ]) ) && ! ( [ -f /.dockerenv ] || [ -f /run/.containerenv ] ) ); then function perform_remediation { mount_point_match_regexp=\"$(printf \"^[[:space:]]*[^#].*[[:space:]]%s[[:space:]]\" /dev/shm)\" # If the mount point is not in /etc/fstab, get previous mount options from /etc/mtab if ! grep -q \"$mount_point_match_regexp\" /etc/fstab; then # runtime opts without some automatic kernel/userspace-added defaults previous_mount_opts=$(grep \"$mount_point_match_regexp\" /etc/mtab | head -1 | awk '{print $4}' \\ | sed -E \"s/(rw|defaults|seclabel|nosuid)(,|$)//g;s",
+    "result": "fail",
+    "rule": "mount_option_dev_shm_nosuid",
+    "oval_id": "xccdf_org.ssgproject.content_rule_mount_option_dev_shm_nosuid",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain",
+    "group": "Restrict Partition Mount Options"
+  },
+  "triage_decision": {
+    "finding_id": "mount_option_dev_shm_nosuid",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "Adding the nosuid mount option to /dev/shm is a standard STIG hardening step that prevents execution of setuid programs in a world\u2011writable tmpfs. It does not modify authentication, networking, or bootloader settings and is unlikely to cause lockout or service disruption.",
+    "requires_human_review": false,
+    "estimated_impact": "filesystems affected; Potential impact on applications that rely on setuid binaries placed in /dev/shm",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "mount_option_dev_shm_nosuid",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 35.71232891082764,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 1.75,
+          "review_qa_seconds": 33.958,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to remediate the finding: add nosuid option to /dev/shm mount in /etc/fstab. We must follow workflow: first PLAN then REVIEW via review_plan. So construct plan: read /etc/fstab, inspect line for /dev/shm, modify options column to include nosuid if not present. Use sed to edit line. Ensure not duplicate. Steps:\n\n1. read_file /etc/fstab.\n2. Determine line: matching non-comment line with mount point /dev/shm (field 2). Use regex.\n3. If exists, capture options field (field 3). If nosuid already present, no change needed. If not, add nosuid to comma-separated list. Use sed to replace the third field.\n\nSed command: `sed -i -r 's|^([[:space:]]*[^#[:space:]].*?[[:space:]])/dev/shm([[:space:]]+)([^[:space:]]+)([[:space:]])|\\1/dev/shm\\2\\3,nosuid\\4|' /etc/fstab` but need careful.\n\nSimpler: use `awk`? But only allowed run_cmd, read/write. Could use sed with capture groups.\n\nPlan description: read /etc/fstab, if line contains /dev/shm and not nosuid, then use sed to edit.\n\nAlso ensure mounting remount after changes: run `mount -o remount, nosuid /dev/shm` or `mount -o remount /dev/shm`. Could run `mount -o remount /dev/shm`.\n\nWe'll propose commands:\n\n- read_file /etc/fstab (inspection)\n- run_cmd `grep -E '^[^#].*\\s/dev/shm\\s' /etc/fstab` (just check) could be part of plan but not needed.\n- run_cmd `sed -i -r '/^[^#].*\\\\s\\\\/dev\\\\/shm\\\\s/ { s/(\\\\s[^[:space:]]+\\\\s)([^[:space:]]+)/\\\\1\\\\2,nosuid/; }' /etc/fstab` (but ensure no duplicate nosuid: can first check existence; or use condition in sed to add if not present: `sed -i -r '/^[^#].*\\\\s\\\\/dev\\\\/shm\\\\s/ { /nosuid/! s/(\\\\s[^[:space:]]+\\\\s)([^[:space:]]+)/\\\\1\\\\2,nosuid/ }' /etc/fstab` )\n\nAfter editing, remount: `mount -o remount /dev/shm`.\n\nWill then verify.\n\nNow produce plan description.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "While adding nosuid to /dev/shm is harmless for running services, the plan edits /etc/fstab with a fragile sed expression and does not create a backup. A malformed fstab entry can prevent the system from booting, which is a serious risk. Additionally, the remount command does not explicitly request the nosuid flag, so the change may not take effect until after a reboot.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "mount_option_dev_shm_nosuid",
+      "is_optimal": false,
+      "approve": true,
+      "feedback": "The plan adds the nosuid option to /dev/shm in /etc/fstab and attempts to remount it, which will ultimately address the vulnerability after a reboot. However, the sed expression is fragile and the remount command does not explicitly request the nosuid flag, so the change may not take effect immediately. Adding a backup of /etc/fstab and using a more reliable edit method would improve safety.",
+      "concerns": [
+        "The sed regular expression may not reliably target the third column and could corrupt the fstab entry.",
+        "The remount command `mount -o remount /dev/shm` does not include the nosuid flag, so the mount may remain without nosuid until reboot.",
+        "No backup of /etc/fstab is created before editing, risking loss of the file if the edit fails.",
+        "If /dev/shm is not present in /etc/fstab, the plan does not handle adding a new entry."
+      ],
+      "suggested_improvements": [
+        "Create a backup of /etc/fstab (e.g., cp /etc/fstab /etc/fstab.bak) before modifying it.",
+        "Use awk or a more precise sed pattern to edit only the mount options field, ensuring proper placement of nosuid.",
+        "Change the remount command to include nosuid, e.g., `mount -o remount,nosuid /dev/shm`.",
+        "Add logic to insert a default /dev/shm entry if none exists in /etc/fstab."
+      ],
+      "security_score": 8,
+      "best_practices_followed": false
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "vulnerability": {
+    "id": "audit_rules_immutable",
+    "title": "Make the auditd Configuration Immutable",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "If the auditd daemon is configured to use the augenrules program to read audit rules during daemon startup (the default), add the following line to a file with suffix .rules in the directory /etc/audit/rules.d in order to make the auditd configuration immutable: -e 2 If the auditd daemon is configured to use the auditctl utility to read audit rules during daemon startup, add the following line to /etc/audit/audit.rules file in order to make the auditd configuration immutable: -e 2 With this setting, a reboot will be required to change any audit rules.",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q audit && rpm --quiet -q kernel-core; then # Traverse all of: # # /etc/audit/audit.rules, (for auditctl case) # /etc/audit/rules.d/*.rules (for augenrules case) # # files to check if '-e .*' setting is present in that '*.rules' file already. # If found, delete such occurrence since auditctl(8) manual page instructs the # '-e 2' rule should be placed as the last rule in the configuration find /etc/audit /etc/audit/rules.d -maxdepth 1 -type f -name '*.rules' -exec sed -i '/-e[[:space:]]\\+.*/d' {} ';' # Append '-e 2' requirement at the end of both: # * /etc/audit/audit.rules file (for auditctl case) # * /etc/audit/rules.d/immutable.rules (for augenrules case) for AUDIT_FILE in \"/etc/audit/audit.rules\" \"/etc/audit/rules.d/i",
+    "result": "fail",
+    "rule": "audit_rules_immutable",
+    "oval_id": "xccdf_org.ssgproject.content_rule_audit_rules_immutable",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain",
+    "group": "Configure auditd Rules for Comprehensive Auditing"
+  },
+  "triage_decision": {
+    "finding_id": "audit_rules_immutable",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The remediation only adds the '-e 2' rule to the audit configuration, making the auditd rules immutable. This is a standard STIG audit rule change, does not affect authentication, networking, or filesystem layout, and is unlikely to cause lockout or service disruption. The change may require a service restart or later reboot to modify rules, but applying it is safe.",
+    "requires_human_review": false,
+    "estimated_impact": "Requires auditd restart or future reboot to modify rules; Potential loss of ability to change audit rules without reboot",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "audit_rules_immutable",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 29.150038957595825,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 2.087,
+          "review_qa_seconds": 27.057,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to remediate audit_rules_immutable: add \"-e 2\" as last rule in appropriate file(s). Need to determine whether audit daemon uses augenrules (default) or auditctl. Usually Rocky Linux uses augenrules, reading from /etc/audit/rules.d/*.rules and compiled to /etc/audit/audit.rules at startup. So we should add \"-e 2\" as a file with suffix .rules in /etc/audit/rules.d (maybe a dedicated file). The description says add line to a file with suffix .rules in directory /etc/audit/rules.d. Could create a new file like /etc/audit/rules.d/99-immutable.rules containing \"-e 2\". Or add to existing .rules files. Safer to create new file.\n\nSteps:\n1. Use read_file to list files in /etc/audit/rules.d maybe via run_cmd 'ls /etc/audit/rules.d/*.rules'. But reading directory via run_cmd. Could just check existence of a file that contains '-e '. Use grep. But we need to inspect before modify.\n\nPlan:\n- Use run_cmd \"ls /etc/audit/rules.d/*.rules\" to get list. If none, fallback to /etc/audit/audit.rules.\n- For each file, read it to check for '-e' line. We'll use run_cmd to grep. But we must read files individually with read_file.\n\nSimplify: create a new file /etc/audit/rules.d/99-immutable.rules with content \"-e 2\". Ensure not duplicate. Check if any existing .rules file already contains '-e' line. Use run_cmd \"grep -R \\\"^-e\\\" /etc/audit/rules.d/*.rules\" . If result non-empty, we should not add duplicate. But we can still add in new file; duplicate may cause warning but rule expects only one -e 2 line. Safer to remove any existing -e lines from all .rules files then add our file.\n\nWe can run sed -i '/^-e[[:space:]]\\+.*/d' on each file. Use run_cmd for each file.\n\nThus plan:\n- Get list of .rules files via run_cmd.\n- For each, run_cmd \"sed -i '/^-e[[:space:]]\\\\+.*/d' <file>\"\n- Then write new file /etc/audit/rules.d/99-immutable.rules with content \"-e 2\\n\"\n- Then restart auditd service: run_cmd \"systemctl restart auditd\"\n\nMake sure to read a file before modifying: we can read first file to see content.\n\nWe'll propose this plan.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "The plan adds the required '-e 2' rule but only creates it in /etc/audit/rules.d/99-immutable.rules. On systems that use auditctl (reading /etc/audit/audit.rules) this file will be ignored, so the immutability setting would not be applied. The remediation should also ensure the rule is present in /etc/audit/audit.rules when that is the active configuration, and that it is the last rule in the file. Until that is added, the plan may not fully resolve the vulnerability.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "audit_rules_immutable",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "The plan adds the required '-e 2' rule but only creates it in /etc/audit/rules.d/99-immutable.rules. On systems that use auditctl (reading /etc/audit/audit.rules) this file will be ignored, so the immutability setting would not be applied. The remediation should also ensure the rule is present in /etc/audit/audit.rules when that is the active configuration, and that it is the last rule in the file. Until that is added, the plan may not fully resolve the vulnerability.",
+      "concerns": [
+        "Does not handle the auditctl case where /etc/audit/audit.rules is used.",
+        "Assumes a simple restart of auditd will apply the new rule; some implementations require a reboot after setting '-e 2'.",
+        "Potential for duplicate '-e' lines if other scripts add the rule elsewhere."
+      ],
+      "suggested_improvements": [
+        "Detect whether the system is using augenrules or auditctl (e.g., check /etc/audit/auditd.conf for 'auditctl' or 'augenrules').",
+        "If auditctl is in use, append '-e 2' to /etc/audit/audit.rules after removing any existing '-e' lines.",
+        "Ensure the '-e 2' line is the very last line in the file(s) being used.",
+        "Document that a reboot may be required to modify rules after immutability is set."
+      ],
+      "security_score": 5,
+      "best_practices_followed": true
+    }
+  ]
+}

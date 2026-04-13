@@ -1,0 +1,92 @@
+{
+  "vulnerability": {
+    "id": "sshd_disable_user_known_hosts",
+    "title": "Disable SSH Support for User Known Hosts",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "SSH can allow system users to connect to systems if a cache of the remote systems public keys is available. This should be disabled. To ensure this behavior is disabled, add or correct the following line in /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf: IgnoreUserKnownHosts yes",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then mkdir -p /etc/ssh/sshd_config.d touch /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf chmod 0600 /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf LC_ALL=C sed -i \"/^\\s*IgnoreUserKnownHosts\\s\\+/Id\" \"/etc/ssh/sshd_config\" LC_ALL=C sed -i \"/^\\s*IgnoreUserKnownHosts\\s\\+/Id\" \"/etc/ssh/sshd_config.d\"/*.conf if [ -e \"/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf\" ] ; then LC_ALL=C sed -i \"/^\\s*IgnoreUserKnownHosts\\s\\+/Id\" \"/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf\" else touch \"/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf\" fi # make sure file has newline at the end sed -i -e '$a\\' \"/etc/ssh/sshd_config.d/00-complianceascode-hardening.conf\" cp \"/etc/s",
+    "result": "fail",
+    "rule": "sshd_disable_user_known_hosts",
+    "oval_id": "xccdf_org.ssgproject.content_rule_sshd_disable_user_known_hosts",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain",
+    "group": "Configure OpenSSH Server if Necessary"
+  },
+  "triage_decision": {
+    "finding_id": "sshd_disable_user_known_hosts",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The remediation only adds a standard SSH daemon configuration directive (IgnoreUserKnownHosts yes) and ensures the file exists with correct permissions. This change follows typical STIG hardening, does not affect boot or filesystem layout, and only requires an sshd reload, posing minimal risk of lockout.",
+    "requires_human_review": false,
+    "estimated_impact": "authentication/authorization affected",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "sshd_disable_user_known_hosts",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 47.54384994506836,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 7.019,
+          "review_qa_seconds": 40.52,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to propose plan: modify /etc/ssh/sshd_config.d/00-complianceascode-hardening.conf to have \"IgnoreUserKnownHosts yes\". Ensure file exists, permissions 0600. Then reload sshd (systemctl reload sshd). But need to ensure not to lock out? This setting is safe.\n\nPlan steps:\n1. read_file of the target file to see if exists or content.\n2. If file does not exist, create it with appropriate content using write_file.\n3. If exists, modify it: if line exists (maybe commented or set differently), use sed -i to set to \"IgnoreUserKnownHosts yes\". Since we need to use sed on that file. We'll use run_cmd with sed -i.\n4. Ensure file permissions: chmod 0600.\n5. Reload sshd: systemctl reload sshd.\n\nWe must follow workflow: first PLAN, then call review_plan, then after approval execute.\n\nLet's craft plan description accordingly.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "The directive IgnoreUserKnownHosts is not valid in sshd_config; adding it to the server configuration will cause sshd to reject the config on reload, potentially bringing down the SSH service and locking out remote access. The plan also unconditionally appends the line, risking duplicate entries and config warnings.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "sshd_disable_user_known_hosts",
+      "is_optimal": false,
+      "approve": true,
+      "feedback": "The plan correctly ensures the required directive is present and reloads sshd, which will remediate the vulnerability. However, the sed command may create duplicate \"IgnoreUserKnownHosts\" lines because the append operation runs regardless of whether a line was replaced. Making the edit idempotent would improve reliability.",
+      "concerns": [
+        "Unconditional appending may result in duplicate IgnoreUserKnownHosts entries.",
+        "The sed expression may not handle multiple existing directives gracefully.",
+        "Reloading may not apply changes if sshd reads configuration only on restart on some distributions."
+      ],
+      "suggested_improvements": [
+        "Delete any existing IgnoreUserKnownHosts lines before appending, e.g., `sed -i '/^\\s*IgnoreUserKnownHosts/d' file && echo 'IgnoreUserKnownHosts yes' >> file`.",
+        "Check for the directive first and only append if missing to avoid duplicates.",
+        "Consider using `systemctl restart sshd` on systems where reload does not reprocess all config files.",
+        "Verify SELinux context and ownership after modifying the file."
+      ],
+      "security_score": 8,
+      "best_practices_followed": true
+    }
+  ]
+}

@@ -1,0 +1,92 @@
+{
+  "vulnerability": {
+    "id": "audit_rules_system_shutdown",
+    "title": "Shutdown System When Auditing Failures Occur",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "If the auditd daemon is configured to use the augenrules program to read audit rules during daemon startup (the default), add the following line to to the bottom of a file with suffix .rules in the directory /etc/audit/rules.d: -f If the auditd daemon is configured to use the auditctl utility to read audit rules during daemon startup, add the following line to the bottom of the /etc/audit/audit.rules file: -f",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q audit && rpm --quiet -q kernel-core; then var_audit_failure_mode='' # Traverse all of: # # /etc/audit/audit.rules, (for auditctl case) # /etc/audit/rules.d/*.rules (for augenrules case) find /etc/audit /etc/audit/rules.d -maxdepth 1 -type f -name '*.rules' -exec sed -i '/-f[[:space:]]\\+.*/d' {} ';' for AUDIT_FILE in \"/etc/audit/audit.rules\" \"/etc/audit/rules.d/immutable.rules\" do echo '' >> $AUDIT_FILE echo '# Set the audit.rules configuration to halt system upon audit failure per security requirements' >> $AUDIT_FILE echo \"-f $var_audit_failure_mode\" >> $AUDIT_FILE done else >&2 echo 'Remediation is not applicable, nothing was done' fi",
+    "result": "fail",
+    "rule": "audit_rules_system_shutdown",
+    "oval_id": "xccdf_org.ssgproject.content_rule_audit_rules_system_shutdown",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain",
+    "group": "Configure auditd Rules for Comprehensive Auditing"
+  },
+  "triage_decision": {
+    "finding_id": "audit_rules_system_shutdown",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The remediation only adds or updates the '-f' audit failure mode line in audit rule files. This is a standard STIG audit rule change, does not affect authentication, networking, or critical services, and can be applied with a simple file edit and auditd restart.",
+    "requires_human_review": false,
+    "estimated_impact": "system will halt on audit failure (intended behavior)",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "audit_rules_system_shutdown",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 18.388832092285156,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 3.778,
+          "review_qa_seconds": 14.607,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to propose a plan to ensure audit failure mode -f is set. The description says add \"-f\" line to appropriate file(s). Need to check which mode audit daemon uses: augenrules or auditctl. Usually default is augenrules reading rules from /etc/audit/rules.d/*.rules, which are compiled to /etc/audit/audit.rules. So we add \"-f\" to a .rules file, e.g., create a file /etc/audit/rules.d/audit_failure.rules with content \"-f\". Ensure not duplicate.\n\nPlan: check if any .rules file already contains -f line. Use grep.\n\nSteps:\n1. read /etc/audit/rules.d/*.rules to see if -f present. But we must read each file using read_file. Could read a generic file like /etc/audit/rules.d/sshd.rules? Might be many. Simpler: check if /etc/audit/rules.d/audit_failure.rules exists. If not, create it with \"-f\". If exists, ensure contains \"-f\". Possibly also modify /etc/audit/audit.rules if using auditctl.\n\nBut requirement: add to bottom of a file with suffix .rules in /etc/audit/rules.d. So create a new file.\n\nPlan steps:\n- read_file /etc/audit/rules.d/audit_failure.rules (if fails, it's not there).\n- If content doesn't contain \"-f\", then write file with \"-f\\n\".\n- Then restart auditd: run_cmd \"systemctl restart auditd\".\n\nAlso ensure that we delete any existing -f lines in other files to avoid duplicates: use sed -i '/-f[[:space:]]*/d' on all .rules files. But careful to modify existing, but that's okay.\n\nThus plan includes:\n1. For each file in /etc/audit/rules.d/*.rules: run sed -i to delete any existing -f lines.\n2. Ensure a dedicated file contains \"-f\".\n\nBut we can't loop directly; need to know file list. Could use find with -exec; but that's a command line with find; okay as single command. Example: run_cmd \"find /etc/audit/rules.d -maxdepth 1 -type f -name '*.rules' -exec sed -i '/-f[[:space:]]\\\\+.*/d' {} \\\\;\". That's one command with find and exec; allowed.\n\nThen write file.\n\nNow produce plan description.\n\nThen call review_plan.\n\n",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "The plan removes existing \"-f\" lines and adds a new file with just \"-f\", but it does not specify the required failure mode value (e.g., \"-f 1\" for panic) and does not address the auditctl configuration (/etc/audit/audit.rules). Without a valid mode, auditd will not halt on failures, so the vulnerability remains.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "audit_rules_system_shutdown",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "The plan removes existing \"-f\" lines and adds a new file with just \"-f\", but it does not specify the required failure mode value (e.g., \"-f 1\" for panic) and does not address the auditctl configuration (/etc/audit/audit.rules). Without a valid mode, auditd will not halt on failures, so the vulnerability remains.",
+      "concerns": [
+        "Missing failure mode argument after \"-f\".",
+        "Auditctl configuration file (/etc/audit/audit.rules) is not updated.",
+        "Potential for duplicate entries if other rule files contain \"-f\" lines that are not removed."
+      ],
+      "suggested_improvements": [
+        "Write \"-f 1\" (or appropriate value) to the dedicated rule file.",
+        "Also update /etc/audit/audit.rules when auditd uses auditctl.",
+        "Ensure removal of \"-f\" lines from all rule files, including /etc/audit/audit.rules.",
+        "Add a step to verify the syntax with \"auditctl -s\" after restart."
+      ],
+      "security_score": 4,
+      "best_practices_followed": false
+    }
+  ]
+}
