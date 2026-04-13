@@ -62,11 +62,11 @@ def _model_name(row: Dict[str, str], csv_path: Path) -> str:
         v = (row.get(key) or "").strip()
         if v and v.lower() != "unknown":
             if "trinity" in v.lower():
-                return "trinity"
+                return "arcee-ai/trinity-large-preview"
             return v
     parent = csv_path.parent.name
     if "trinity" in parent.lower():
-        return "trinity"
+        return "arcee-ai/trinity-large-preview"
     if "20b" in parent.lower():
         return "openai/gpt-oss-20b"
     if "120b" in parent.lower():
@@ -173,9 +173,9 @@ a:hover { text-decoration:underline; }
 .chart-stack { display:grid; grid-template-rows:230px auto; gap:8px; }
 .chart-area { position:relative; height:230px; border-left:1px solid #d1d5db; border-bottom:1px solid #d1d5db; overflow-x:auto; }
 .grid-line { position:absolute; left:0; right:0; border-top:1px dashed #e5e7eb; }
-.chart { position:absolute; left:0; right:0; bottom:0; display:flex; gap:22px; align-items:flex-end; padding:0 12px; min-width:max-content; }
-.group { min-width:180px; text-align:center; } .group-bars { display:flex; justify-content:center; gap:10px; align-items:flex-end; height:230px; }
-.mini { width:42px; height:230px; display:block; position:relative; text-decoration:none; color:inherit; }
+.chart { position:absolute; left:0; right:0; bottom:0; display:flex; gap:12px; align-items:flex-end; padding:0 8px; min-width:max-content; }
+.group { min-width:120px; text-align:center; } .group-bars { display:flex; justify-content:center; gap:6px; align-items:flex-end; height:230px; }
+.mini { width:28px; height:230px; display:block; position:relative; text-decoration:none; color:inherit; }
 .mini-txt { position:absolute; left:0; right:0; color:#4b5563; text-align:center; pointer-events:none; display:flex; flex-direction:column; align-items:center; line-height:1.15; white-space:nowrap; }
 .mini-size { font-weight:700; font-size:11px; }
 .mini-pct { font-size:10px; }
@@ -183,8 +183,8 @@ a:hover { text-decoration:underline; }
 .seg { width:100%; }
 .legend { margin:8px 0 14px; color:#4b5563; font-size:13px; display:flex; gap:14px; flex-wrap:wrap; }
 .swatch { display:inline-block; width:10px; height:10px; border-radius:2px; margin-right:6px; vertical-align:middle; }
-.xlabels { display:flex; gap:22px; padding-left:12px; min-width:max-content; align-items:flex-start; }
-.xlabel-model { min-width:180px; width:180px; text-align:center; font-weight:600; font-size:12px; line-height:1.25; }
+.xlabels { display:flex; gap:12px; padding-left:8px; min-width:max-content; align-items:flex-start; }
+.xlabel-model { min-width:120px; width:120px; text-align:center; font-weight:600; font-size:11px; line-height:1.25; }
 .runs { border:1px solid #e5e7eb; border-radius:10px; overflow:hidden; margin:12px 0; }
 .run-head,.run-row { display:grid; grid-template-columns:110px 130px 110px 130px 110px 1fr; gap:8px; align-items:center; padding:10px 12px; }
 .run-head { background:#f8fafc; font-weight:600; border-bottom:1px solid #e5e7eb; }
@@ -254,10 +254,11 @@ def render_root(out_dir: Path, by_model_size: Dict[Tuple[str, str], List[RunStat
             runs = by_model_size.get((m, size), [])
             if not runs:
                 continue
-            found = sum(r.found for r in runs)
-            p1 = sum(r.pass1 for r in runs)
-            p2 = sum(r.pass2 for r in runs)
-            p3 = sum(r.pass3 for r in runs)
+            best = max(runs, key=lambda r: r.remediation_pct)
+            found = best.found
+            p1 = best.pass1
+            p2 = best.pass2
+            p3 = best.pass3
             pct1 = (p1 / found * 100.0) if found else 0.0
             pct2 = (p2 / found * 100.0) if found else 0.0
             pct3 = (p3 / found * 100.0) if found else 0.0
@@ -312,12 +313,13 @@ def render_model_pages(out_dir: Path, runs: List[RunStats]) -> None:
             rs = by_model_size.get((m, size), [])
             if not rs:
                 continue
-            found = sum(r.found for r in rs)
-            succ = sum(r.succeeded for r in rs)
-            fail = sum(r.failed for r in rs)
-            p1 = sum(r.pass1 for r in rs)
-            p2 = sum(r.pass2 for r in rs)
-            p3 = sum(r.pass3 for r in rs)
+            best = max(rs, key=lambda r: r.remediation_pct)
+            found = best.found
+            succ = best.succeeded
+            fail = best.failed
+            p1 = best.pass1
+            p2 = best.pass2
+            p3 = best.pass3
             pct1 = (p1 / found * 100.0) if found else 0.0
             pct2 = (p2 / found * 100.0) if found else 0.0
             pct3 = (p3 / found * 100.0) if found else 0.0
