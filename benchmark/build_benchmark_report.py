@@ -460,7 +460,7 @@ def render_run_page(run_dir: Path, model: str, size: str, run_label: str, run_sl
 
 def main() -> int:
     p = argparse.ArgumentParser()
-    p.add_argument("--input-dirs", nargs="+", default=["reports", "reports_20b"])
+    p.add_argument("--input-dirs", nargs="+", default=["reports"])
     p.add_argument("--output-dir", default="benchmark")
     p.add_argument("--small-max", type=int, default=40)
     p.add_argument("--medium-max", type=int, default=100)
