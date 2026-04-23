@@ -1,0 +1,90 @@
+{
+  "vulnerability": {
+    "id": "audit_rules_etc_cron_d",
+    "title": "Ensure auditd Collects Changes to Cron Jobs - /etc/cron.d/",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "At a minimum, the audit system should collect administrator actions for all users and root. If the auditd daemon is configured to use the augenrules program to read audit rules during daemon startup (the default), add the following lines to a file with suffix .rules in the directory /etc/audit/rules.d: -w /etc/cron.d/ -p wa -k cronjobs If the auditd daemon is configured to use the auditctl utility to read audit rules during daemon startup, add the following lines to /etc/audit/audit.rules: -w /etc/cron.d/ -p wa -k cronjobs",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q audit && rpm --quiet -q kernel-core; then # Perform the remediation for both possible tools: 'auditctl' and 'augenrules' # Create a list of audit *.rules files that should be inspected for presence and correctness # of a particular audit rule. The scheme is as follows: # # ----------------------------------------------------------------------------------------- # Tool used to load audit rules | Rule already defined | Audit rules file to inspect | # ----------------------------------------------------------------------------------------- # auditctl | Doesn't matter | /etc/audit/audit.rules | # ----------------------------------------------------------------------------------------- # augenrules | Yes | /etc/audit/rules.",
+    "result": "fail",
+    "rule": "audit_rules_etc_cron_d",
+    "oval_id": "xccdf_org.ssgproject.content_rule_audit_rules_etc_cron_d",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "audit_rules_etc_cron_d",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "Adding an audit rule for /etc/cron.d/ is a standard configuration change that does not affect authentication, networking, or filesystem integrity, and it follows STIG hardening patterns for auditd.",
+    "requires_human_review": false,
+    "estimated_impact": null,
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "audit_rules_etc_cron_d",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 15.452731132507324,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 7.55,
+          "review_qa_seconds": 7.901,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to produce answer as per the provided tool instructions. Must submit plan first via review_plan, then commands. Let's draft plan: We need to ensure audit rule for /etc/cron.d/ present: -w /etc/cron.d/ -p wa -k cronjobs. Since auditd uses augenrules (default), we should add to a file in /etc/audit/rules.d with suffix .rules. Typical file name maybe 10-cronjobs.rules. We should first check if any file containing that rule already. Use read_file for each .rules file? We will check by listing? But we don't have list command? We can run shell command? Using run_cmd, e.g., run_cmd command: ls /etc/audit/rules.d/*.rules. Then parse? But system may not have many. Simplest: just create /etc/audit/rules.d/cronjobs.rules with the rule content and ensure it is not duplicated. But we must read file before modify. So create file if not exist. Use read_file on that path: if not exist? Read_file will fail? Let's propose to attempt to read. If not exist, we will write new file. Use write_file with content. Optionally set mode? 0640.\n\nWe should also check if auditd configuration uses auditctl. Typically /etc/audit/audit.rules. We can check if that file exists and see if rule present; if not, add. But risk of duplicating if rule already present. We should read it. Use read_file on /etc/audit/audit.rules. If rule not found, append line. But we cannot append duplicate lines, but need to add. Use sed -i? For appending we can use write_file with content appended? More direct: we can use run_cmd \"echo '-w /etc/cron.d/ -p wa -k cronjobs' >> /etc/audit/audit.rules\" but they restrict to using commands exactly; that's okay. But must ensure no duplicate. So first read file, check presence; if not include, then use run_cmd to append. But we cannot read and then run accordingly? We have control. We'll produce plan accordingly.\n\nAlso we must not modify other config.\n\nAlso must avoid chain commands.\n\nSo solution: \n\n1. Determine whether augenrules or auditctl is used. Most likely augenrules. but to be safe check /etc/audit/audit.rules existence and see if the auditctl start is present? We might decide to do both.\n\nImplement plan:\n\n- Read /etc/audit/rules.d/cronjobs.rules; if not exist or rule missing, write file with rule.\n\n- Read /etc/audit/audit.rules; if file exists and rule missing, append rule.\n\nWill produce plan.\n\nWe need to call review_plan. Let's craft review_plan call.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "The plan falls short because it does not reload or restart auditd after modifying the rules, so the new audit rule will not be active until a service restart. Furthermore, overwriting an existing /etc/audit/rules.d/cronjobs.rules file may unintentionally strip other rules that were already present in that file. The script also does not explicitly set ownership on the new file, which could lead to unintended permissions if the script runs with unexpected UID/GID.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "audit_rules_etc_cron_d",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "The plan falls short because it does not reload or restart auditd after modifying the rules, so the new audit rule will not be active until a service restart. Furthermore, overwriting an existing /etc/audit/rules.d/cronjobs.rules file may unintentionally strip other rules that were already present in that file. The script also does not explicitly set ownership on the new file, which could lead to unintended permissions if the script runs with unexpected UID/GID.",
+      "concerns": [
+        "Missing reload/restart of auditd after rule change",
+        "Overwrites existing cronjobs.rules content potentially deleting other rules",
+        "No explicit ownership/permission enforcement beyond the mode"
+      ],
+      "suggested_improvements": [
+        "After modifying /etc/audit/rules.d/cronjobs.rules or /etc/audit/audit.rules, run `systemctl reload auditd` or `auditctl -R` to apply changes.",
+        "Prefer appending the rule to /etc/audit/rules.d/cronjobs.rules if the file exists rather than overwriting it, or at least preserve existing content.",
+        "Set file ownership to root:root after creation to ensure correct permissions."
+      ],
+      "security_score": 6,
+      "best_practices_followed": false
+    }
+  ]
+}

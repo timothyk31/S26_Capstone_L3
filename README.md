@@ -1,130 +1,120 @@
-## Adaptive OpenSCAP QA Agent
+# Multi-Agent OpenSCAP Security Compliance System
 
-This repository’s primary entrypoint is an adaptive OpenSCAP-based QA agent that connects to a Rocky Linux target over SSH, runs compliance scans, and uses an LLM (via an OpenAI-compatible API such as OpenRouter) to iteratively remediate and verify vulnerabilities.
+An automated security compliance scanning and remediation pipeline for Rocky Linux systems, powered by OpenSCAP and LLM-driven agents.
 
-The main script is:
+The system scans a target VM with OpenSCAP, then processes every failed finding through a multi-agent workflow — Triage, Remedy, Review, and QA — to automatically remediate security vulnerabilities with built-in safety checks. Dependency-grouped findings are remediated in parallel for throughput, while each finding is verified immediately via single-rule scan after remediation.
 
-- `qa_agent_adaptive.py` — adaptive, per-vulnerability remediation loop
+## Table of Contents
+- [Requirements](#requirements)
+- [External Dependencies](#external-dependencies)
+- [Environmental Variables](#environmental-variables)
+- [Installation and Setup](#installation-and-setup)
+- [Usage](#usage)
+- [Features](#features)
+- [Documentation](#documentation)
+- [Credits and Acknowledgments](#credits-and-acknowledgments)
+- [License](#license)
+- [Contact Information](#contact-information)
 
-Older Nessus-based and QA-loop flows are preserved in `legacy_files/` for reference.
+## Requirements
 
-## What the adaptive agent does
+This code has been run and tested using the following internal and external components.
 
-- **Scan**: Uses `openscap_cli.OpenSCAPScanner` to run an OpenSCAP XCCDF evaluation on the remote host.
-- **Parse**: Converts the resulting XML/ARF into a normalized JSON list of failed/error rules via `parse_openscap.py`.
-- **Adapt & remediate**: For each vulnerability:
-  - Builds a rich prompt with rule details and prior attempts.
-  - Lets an LLM propose concrete shell commands (executed via SSH, one at a time).
-  - Verifies the effect by re-running a focused OpenSCAP scan.
-  - Retries with feedback up to `--max-attempts` times.
-- **Report & playbook**: Writes a detailed text/PDF report plus a final Ansible playbook containing only _proven-working_ remediation commands.
+### Environment
+- Rocky Linux 9/10 (target VM)
+- Python 3.10+
+- SSH access to target host (key-based authentication)
+- OpenSCAP installed on target (`oscap` CLI and SCAP content such as `ssg-rl9-ds.xml` or `ssg-rl10-ds.xml`)
 
-All working files for the adaptive runs go under the directory passed via `--work-dir` (default `adaptive_qa_work/`).
+### Program
+- pydantic >= 2
+- pydantic-ai[openai] >= 0.0.15
+- requests >= 2.31.0
+- python-dotenv >= 1.0.1
+- rich >= 13.0.0
+- pyyaml >= 6.0.0
+- ansible-core >= 2.15.0
+- reportlab >= 4.0.0
+- braintrust >= 0.0.160
+- pytest >= 7.0.0
+- click >= 8.0.0
+- responses >= 0.23.0
 
-## Prerequisites
+### Tools
+- [GitHub](https://github.com/timothyk31/482) - Main repository
+- Git for version control
+- OpenRouter API (or any OpenAI-compatible LLM endpoint)
 
-- **Python**: 3.10+ recommended
-- **Dependencies**:
+## External Dependencies
+- Python 3.10+ - Download latest version at https://www.python.org/downloads/
+- Git - Download latest version at https://git-scm.com/book/en/v2/Getting-Started-Installing-Git
+- OpenSCAP - Must be installed on the target Rocky Linux VM (`sudo dnf install openscap-scanner scap-security-guide`)
+
+## Environmental Variables
+
+The system uses environment variables for LLM API configuration, typically defined in a `.env` file in the project root.
+
+**Required:**
+| Variable | Description |
+|---|---|
+| `OPENROUTER_API_KEY` | API key for the LLM provider |
+| `OPENROUTER_MODEL` | Default LLM model name (e.g. `meta-llama/llama-3.1-70b-instruct`) |
+
+**Optional:**
+| Variable | Description | Default |
+|---|---|---|
+| `OPENROUTER_BASE_URL` | Base URL for the API | `https://openrouter.ai/api/v1` |
+| `OPENROUTER_HTTP_REFERER` | HTTP referer header for API requests | — |
+| `OPENROUTER_APP_TITLE` | Application title for API headers | — |
+| `REMEDY_AGENT_MODEL` | Override model for the Remedy agent | Uses `OPENROUTER_MODEL` |
+| `REVIEW_AGENT_MODEL` | Override model for the Review agent | Uses `OPENROUTER_MODEL` |
+| `QA_AGENT_V2_MODEL` | Override model for the QA agent | Uses `OPENROUTER_MODEL` |
+| `TRIAGE_MODEL` | Override model for the Triage agent | Uses `OPENROUTER_MODEL` |
+
+## Installation and Setup
+
+Download this code repository using git:
+
+```bash
+git clone https://github.com/timothyk31/482.git
+```
+
+Navigate to the project directory:
+
+```bash
+cd 482/S26_Capstone_L3
+```
+
+(Optional) Create and activate a virtual environment:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate  # Windows: .venv\Scripts\activate
+```
+
+Install dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-- **OpenAI-compatible API** (e.g. OpenRouter):
+Create a `.env` file in the project root with your LLM API credentials:
 
-  - Environment variables (typically defined in `.env`):
-    - `OPENROUTER_API_KEY` — API key
-    - `OPENROUTER_MODEL` — model name (e.g. `meta-llama/llama-3.1-70b-instruct`)
-    - `OPENROUTER_BASE_URL` — base URL, default `https://openrouter.ai/api/v1`
+```bash
+OPENROUTER_API_KEY=your_api_key_here
+OPENROUTER_MODEL=meta-llama/llama-3.1-70b-instruct
+OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
+```
 
-- **Target host**:
-  - Rocky Linux (10 in current defaults) with OpenSCAP content installed (`oscap` and SCAP content such as `ssg-rl10-ds.xml`).
-  - SSH access with either passwordless sudo or a known sudo password.
-
-## Quick start
-
-1. **Clone and install dependencies**
-
-   ```bash
-   git clone <this-repo-url>
-   cd F25_Capstone_L3
-
-   # (Optional) create and activate a virtualenv
-   python -m venv .venv
-   source .venv/bin/activate  # Windows: .venv\Scripts\activate
-
-   pip install -r requirements.txt
-   ```
-
-2. **Configure your LLM endpoint**
-
-   Create a `.env` file in the repo root (based on `env.template` if present):
-
-   ```bash
-   OPENROUTER_API_KEY=your_api_key_here
-   OPENROUTER_MODEL=meta-llama/llama-3.1-70b-instruct
-   OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
-   ```
-
-3. **Create `inventory.yml` for your Rocky host**
-
-   Either copy from `inventory.yml.template` (if present) or start from this example and adjust IP, user, key path, and sudo password:
-
-   ```yaml
-   all:
-     hosts:
-       mertcis:
-         ansible_host: 192.168.124.129 # or your VM IP / hostname
-         ansible_port: 22
-         ansible_user: llmagent1 # SSH user
-         ansible_ssh_private_key_file: /path/to/id_ed25519
-         ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
-         ansible_become: true
-         ansible_become_method: sudo
-         ansible_become_password: YOUR_SUDO_PASSWORD
-   ```
-
-4. **Run the adaptive agent against your host**
-
-   From the repo root (adjust flags as needed):
-
-   ```bash
-   python -B qa_agent_adaptive.py \
-     --host 192.168.124.130 \
-     --user llmagent1 \
-     --sudo-password "<sudo_password>" \
-     --inventory inventory.yml \
-     --profile xccdf_org.ssgproject.content_profile_cis \
-     --datastream /usr/share/xml/scap/ssg/content/ssg-rl10-ds.xml \
-     --work-dir adaptive_qa_work \
-     --max-vulns 25 \
-     --min-severity 2 \
-     --max-attempts 3 \
-     --key C:\Users\coope\.ssh\rocky_vm \
-     --randomize \
-     --non-interactive
-   ```
-
-5. **Review results and playbooks**
-
-   After the run completes, inspect `adaptive_qa_work/` for the reports and generated Ansible playbook (see “Outputs” below).
-
-## Inventory and SSH configuration
-
-The agent relies on an Ansible-style inventory to describe how to reach the target host. A sample `inventory.yml` is provided and currently points to a host named `mertcis`:
-
-- Host, user, SSH key, and sudo settings are defined under `all.hosts.mertcis`.
-- `qa_agent_adaptive.py` itself only needs the `--host`, `--user`, `--key` and `--sudo-password` flags; the `--inventory` flag is used mainly for consistency with other tooling and for future Ansible or legacy-flow integration.
-
-A minimal `inventory.yml` for a single Rocky host looks like:
+Create an `inventory.yml` for your target Rocky Linux host:
 
 ```yaml
 all:
   hosts:
-    mertcis:
-      ansible_host: 192.168.124.129 # or your VM IP / hostname
+    myhost:
+      ansible_host: 192.168.124.129  # Your VM IP or hostname
       ansible_port: 22
-      ansible_user: llmagent1 # SSH user
+      ansible_user: llmagent1        # SSH user
       ansible_ssh_private_key_file: /path/to/id_ed25519
       ansible_ssh_common_args: "-o StrictHostKeyChecking=no"
       ansible_become: true
@@ -132,73 +122,162 @@ all:
       ansible_become_password: YOUR_SUDO_PASSWORD
 ```
 
-Recommended workflow is to keep a generic `inventory.yml.template` (no real passwords) in git and create a local `inventory.yml` by copying and filling in environment-specific values. Adapt `inventory.yml` to your environment (IP/hostname, SSH key path, and sudo behaviour), and avoid committing real passwords to version control.
-
-## Running the adaptive agent
-
-From the repository root, a typical non-interactive run looks like:
+Ensure your target VM has OpenSCAP installed:
 
 ```bash
-python -B qa_agent_adaptive.py \
+sudo dnf install openscap-scanner scap-security-guide
+```
+
+## Usage
+
+Run the multi-agent pipeline against your target host:
+
+```bash
+python main_multiagent.py \
+  --inventory inventory.yml \
   --host 192.168.124.130 \
   --user llmagent1 \
   --sudo-password "<sudo_password>" \
-  --inventory inventory.yml \
-  --profile xccdf_org.ssgproject.content_profile_cis \
-  --datastream /usr/share/xml/scap/ssg/content/ssg-rl10-ds.xml \
-  --work-dir adaptive_qa_work \
+  --key /path/to/your/ssh/key \
+  --profile xccdf_org.ssgproject.content_profile_stig \
+  --datastream /usr/share/xml/scap/ssg/content/ssg-rl9-ds.xml \
   --max-vulns 25 \
-  --min-severity 2 \
-  --max-attempts 3 \
-  --key C:\Users\coope\.ssh\rocky_vm \
-  --randomize \
-  --non-interactive
+  --min-severity 2
 ```
 
-Key flags:
+### Key CLI Flags
 
-- **`--host` / `--user` / `--key` / `--sudo-password`**: SSH connectivity to the Rocky host.
-- **`--profile` / `--datastream`**: Which OpenSCAP content/profile to run (CIS Rocky 10 by default).
-- **`--work-dir`**: Where all XML/JSON logs, per-vulnerability attempts, transcripts, and final reports/playbooks are written.
-- **`--max-vulns` / `--min-severity`**: Control which and how many findings are processed.
-- **`--max-attempts`**: Max remediation attempts per vulnerability.
-- **`--randomize`**: Shuffle vulnerability order.
-- **`--non-interactive`**: Process all selected vulnerabilities without prompting between them.
+**Target Host:**
+| Flag | Description | Default |
+|---|---|---|
+| `--inventory` | Ansible inventory file describing target hosts | — |
+| `--host` | Target host IP or hostname | — |
+| `--user` | SSH user | `root` |
+| `--key` | SSH private key path | — |
+| `--port` | SSH port | `22` |
+| `--sudo-password` | Sudo password on target | — |
 
-## Outputs
+**Pipeline Options:**
+| Flag | Description | Default |
+|---|---|---|
+| `--min-severity` | Minimum severity to process (0-4) | `2` |
+| `--max-vulns` | Cap the number of vulnerabilities to process | All |
+| `--max-remedy-attempts` | Max remedy retries per finding | `3` |
+| `--max-parallel-groups` | Max dependency groups to remediate in parallel | `4` |
+| `--skip-scan` | Skip initial scan; use existing parsed JSON | — |
 
-In `adaptive_qa_work/` (or your chosen `--work-dir`), you will typically see:
+**Agent Options:**
+| Flag | Description | Default |
+|---|---|---|
+| `--triage-mode` | Triage LLM quality tier (`fast`, `balanced`, `smart`) | `balanced` |
+| `--review-model` | Override the Review agent LLM model | env variable |
+| `--lenient-triage` | Prefer safe_to_remediate over requires_human_review | `false` |
+| `--max-complexity` | Max remediation complexity (`low`, `medium`, `high`) | `medium` |
 
-- `adaptive_results.json` — machine-readable summary of all attempts and outcomes.
-- `adaptive_report.txt` and `adaptive_report.pdf` — human-readable reports.
-- `final_remediation_playbook_*.yml` — Ansible playbook with only successful remediation commands.
-- `final_playbook_summary_*.txt` — summary listing vulnerabilities and commands included in the playbook.
-- Per-vulnerability artifacts (e.g. `fix_openscap_001_attempt1.*`, `verify_<rule>.xml/json`, LLM transcripts).
+### Example: Skip scan and use existing results
 
-These files are considered **generated artifacts** and are ignored by git.
+```bash
+python main_multiagent.py \
+  --skip-scan --parsed-json oscap_stig_rl9_parsed.json \
+  --host 10.244.72.95 --user root --key ~/.ssh/id_rsa
+```
 
-## Repository layout (main files)
+### Example: Limit scope for testing
 
-- **`qa_agent_adaptive.py`**: Primary entrypoint; orchestrates OpenSCAP scans, parses results, drives the LLM remediation loop, verifies fixes, and writes reports/playbooks under `--work-dir`.
-- **`openscap_cli.py`**: SSH-based wrapper around the `oscap` CLI; provides the `OpenSCAPScanner` used by the adaptive agent (and some legacy tools) to run scans and download XML results.
-- **`parse_openscap.py`**: Parser that converts OpenSCAP XML/ARF results into a JSON list of failed/error rules compatible with the `Vulnerability` schema.
-- **`schemas.py`**: Pydantic models shared across the project, including `Vulnerability`, `RemediationSuggestion`, `RunCommandResult`, `ToolVerdict`, and `BatchResult`.
-- **`qa_framework.py`**: Ansible playbook abstraction layer (`AnsibleTask`, `RemediationPlaybook`, plus a legacy `VulnerabilityRemediation` helper) used by `remediation_bridge.py` and indirectly by the adaptive agent when generating final playbooks.
-- **`remediation_bridge.py`**: Translates `RemediationSuggestion` objects into concrete Ansible tasks and composes them into a `RemediationPlaybook`; called by the adaptive agent to build the final “proven remediation” playbook.
-- **`mitm_proxy.py`**: Optional HTTP proxy for OpenAI-compatible APIs that logs prompts and model responses into `adaptive_qa_work/llm_mitm.txt` for auditing or debugging.
-- **`inventory.yml`**: Environment-specific Ansible inventory describing how to reach your Rocky host (IP, SSH user/key, sudo settings). Treat this as a local config file and avoid committing real secrets.
-- **`requirements.txt`**: Python dependencies for the adaptive agent and its supporting tooling.
-- **`setup.py`**: Basic packaging metadata that allows the project to be installed as a package (e.g. via `pip install -e .`).
-- **`test_qa_framework.py`**: Unit tests for the `qa_framework.py` abstractions (mainly relevant when extending or refactoring the playbook-generation logic).
-- **`verify_commit.sh`**: Developer helper script to check for common security and hygiene issues before committing (e.g. `.env` tracked in git, SSH keys, work directories, missing key files).
-- **`adaptive_qa_work/`**: Default working directory for `qa_agent_adaptive.py` where scan results, logs, reports, and generated playbooks are written (ignored by git).
+```bash
+python main_multiagent.py \
+  --inventory inventory.yml \
+  --max-vulns 5 --min-severity 3
+```
 
-## Legacy code
+### Output Artifacts
 
-Older, Nessus-based and QA-loop oriented workflows are preserved under `legacy_files/`:
+After the run completes, inspect `reports/` and `pipeline_work/`:
 
-- Nessus parsing and remediation pipeline (`agent.py`, `parse_nessus.py`, `run_pipeline.py`) — see `legacy_files/README_nessus.md`.
-- QA loop and interactive end-to-end scripts that combine OpenSCAP, the Nessus-style agent, and Ansible.
-- Example SSH setup and runner scripts under `legacy_files/tools/`.
+**Main Reports:**
+- `reports/<model>_<timestamp>/v2_aggregated_results.json` — Complete pipeline results for all findings
+- `reports/<model>_<timestamp>/v2_pipeline_report.txt` — Text summary report
+- `reports/<model>_<timestamp>/triage_report.pdf` — Triage decisions PDF
+- Agent-specific reports for remedy, review, and QA
 
-They are **not** required to run the adaptive OpenSCAP QA agent, but are kept for future reference and experimentation.
+**Working Files:**
+- `pipeline_work/agent_reports/` — Individual agent outputs and decisions
+- `pipeline_work/scans/` — OpenSCAP scan results and verification data
+- `pipeline_work/transcripts/` — LLM conversation transcripts per agent
+
+These files are generated artifacts and are ignored by git.
+
+## Features
+
+- **Multi-Agent Architecture**: Four specialized LLM-driven agents (Triage, Remedy, Review, QA) work together with distinct responsibilities and safety checks
+- **Automated Triage**: LLM-based risk assessment decides whether each finding should be remediated, sent for human review, or skipped
+- **Parallel Remediation**: Findings are grouped by shared system resources (PAM, sysctl, mounts, etc.) and groups are remediated in parallel via dependency-aware worker pools
+- **Review + QA Approval Gate**: Every remediation plan is validated by a Review agent for correctness and a QA agent for system safety before commands are executed
+- **Per-Finding Verification**: Each remediated finding is immediately verified with a targeted single-rule OpenSCAP scan
+- **Automatic Retries**: Failed remediations are retried with feedback from previous attempts (up to configurable max)
+- **Comprehensive Reporting**: JSON results, text reports, and PDF summaries are generated for every run
+- **SSH-Based Execution**: All commands run over SSH on the target VM — no agent software required on the target
+- **Configurable LLM Models**: Each agent can use a different LLM model via environment variable overrides
+
+## Documentation
+
+### Repository Layout
+
+**Core Multi-Agent System:**
+- `main_multiagent.py` — Primary entrypoint; orchestrates the full pipeline
+- `agents/` — Agent implementations: `triage_agent.py`, `remedy_agent.py`, `review_agent.py`, `qa_agent_v2.py`, and V2 wrappers
+- `workflow/` — Pipeline orchestration: `pipeline_v2.py` (single-finding workflow)
+- `schemas.py` — Pydantic data models for all agent inputs/outputs
+
+**Core Infrastructure:**
+- `openscap_cli.py` — SSH-based wrapper around the `oscap` CLI
+- `parse_openscap.py` — Parser converting OpenSCAP XML/ARF to JSON
+- `helpers/` — Shared utilities: LLM interface (`llm_interface.py`), command execution (`command_executor.py`), scanning (`scanner.py`), and report generation
+
+**Configuration:**
+- `inventory.yml` — Ansible inventory describing target hosts
+- `requirements.txt` — Python dependencies
+- `.env` — LLM API credentials (not committed)
+
+**Legacy Code:**
+- `legacy_code/` — Older implementations including single-agent systems, Nessus-based workflows, and utility scripts (not required for current system)
+
+### Troubleshooting
+
+- **SSH connection failures**: Verify your SSH key, host IP, and that the target VM is reachable. Ensure `StrictHostKeyChecking=no` is set if using a new host.
+- **OpenSCAP not found**: Install OpenSCAP on the target VM with `sudo dnf install openscap-scanner scap-security-guide`.
+- **LLM API errors**: Check that `OPENROUTER_API_KEY` is valid and `OPENROUTER_BASE_URL` is correct in your `.env` file.
+- **Findings skipped as SSH-related**: The pipeline automatically skips SSH configuration findings that could break the active SSH session.
+
+## Credits and Acknowledgments
+
+### Contributors
+- [Timothy Kurniawan](https://github.com/timothyk31)
+- [Vishal Suresh](https://github.com/vishalsuresh06)
+- [Nicholas Turoci](https://github.com/n2rowc)
+- [Lawrence Wong](https://github.com/laroldz)
+- [Sophie L](https://github.com/sophiel19)
+
+### Third-Party Libraries
+This project uses the following third-party libraries:
+- [Pydantic](https://docs.pydantic.dev/) (MIT License) — Data validation and settings management
+- [Rich](https://github.com/Textualize/rich) (MIT License) — Terminal formatting and progress bars
+- [ReportLab](https://www.reportlab.com/) (BSD License) — PDF report generation
+- [PyYAML](https://pyyaml.org/) (MIT License) — YAML inventory parsing
+- [python-dotenv](https://github.com/theskumar/python-dotenv) (BSD License) — Environment variable loading
+- [Braintrust](https://www.braintrust.dev/) (MIT License) — LLM evaluation framework
+- [Ansible Core](https://github.com/ansible/ansible) (GPL-3.0 License) — Infrastructure automation
+
+### Acknowledgments
+- OpenSCAP project for the security compliance scanning framework
+- SCAP Security Guide for the STIG/CIS benchmark content
+- OpenRouter for LLM API access
+- L3Harris for mentorship
+
+## License
+
+This project is developed as part of the Texas A&M University CSCE 482 Capstone course (Spring 2026).
+
+## Contact Information
+
+For any questions or issues, please contact the team through the GitHub repository or reach out to the contributors listed above.

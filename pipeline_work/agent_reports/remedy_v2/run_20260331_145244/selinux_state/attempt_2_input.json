@@ -1,0 +1,84 @@
+{
+  "vulnerability": {
+    "id": "selinux_state",
+    "title": "Ensure SELinux State is Enforcing",
+    "severity": "3",
+    "cvss": null,
+    "host": "its-nagios-backend.tamu.edu",
+    "port": null,
+    "protocol": null,
+    "description": "The SELinux state should be set to at system boot time. In the file /etc/selinux/config, add or correct the following line to configure the system to boot into enforcing mode: SELINUX= Ensure that all files have correct SELinux labels by running: fixfiles onboot Then reboot the system.",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then var_selinux_state='' if [ -e \"/etc/selinux/config\" ] ; then LC_ALL=C sed -i \"/^SELINUX=/Id\" \"/etc/selinux/config\" else touch \"/etc/selinux/config\" fi # make sure file has newline at the end sed -i -e '$a\\' \"/etc/selinux/config\" cp \"/etc/selinux/config\" \"/etc/selinux/config.bak\" # Insert at the end of the file printf '%s\\n' \"SELINUX=$var_selinux_state\" >> \"/etc/selinux/config\" # Clean up after ourselves. rm \"/etc/selinux/config.bak\" fixfiles onboot else >&2 echo 'Remediation is not applicable, nothing was done' fi",
+    "result": "fail",
+    "rule": "selinux_state",
+    "oval_id": "xccdf_org.ssgproject.content_rule_selinux_state",
+    "scan_class": "compliance",
+    "os": "its-nagios-backend.tamu.edu"
+  },
+  "triage_decision": {
+    "finding_id": "selinux_state",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The remediation only edits /etc/selinux/config, runs the standard fixfiles relabel, and requires a reboot. While SELinux enforcement can cause service disruptions if policies are incorrect, the STIG expects enforcing mode and the fix follows standard practice, so the change is considered low risk and reversible.",
+    "requires_human_review": false,
+    "estimated_impact": "reboot required; authentication/authorization affected; filesystems affected; Potential service disruption if SELinux policies are not fully compatible; Temporary loss of functionality until reboot and relabel complete",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "selinux_state",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 61.80075216293335,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 13.812,
+          "review_qa_seconds": 47.989,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      }
+    }
+  ],
+  "review_feedback": "The plan changes the SELinux mode to enforcing and immediately runs setenforce 1 without guaranteeing that all file contexts are correctly labeled. If any files or services (e.g., sshd) have incorrect or missing SELinux labels, enforcing mode can cause immediate denials, potentially locking out SSH access or stopping critical services. The fixfiles onboot step only schedules a relabel for the next reboot, so the system may be left in a partially enforced state that can break services.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "selinux_state",
+      "is_optimal": false,
+      "approve": true,
+      "feedback": "The plan will correctly set SELinux to enforcing at boot and apply the change immediately. It addresses the vulnerability, but could be hardened with a few best\u2011practice tweaks.",
+      "concerns": [
+        "The script does not create a backup of /etc/selinux/config before modifying it.",
+        "If SELinux is disabled (SELINUX=disabled), setenforce 1 will fail and the system may still boot permissive.",
+        "The approach does not explicitly ensure the file ends with a newline, which can sometimes cause parsing issues."
+      ],
+      "suggested_improvements": [
+        "Create a backup (e.g., cp /etc/selinux/config /etc/selinux/config.bak) before editing.",
+        "Check the current SELINUX value; if it is 'disabled', alert the operator because enabling enforcing requires a reboot and may need policy installation.",
+        "After editing, ensure a trailing newline (e.g., use 'sed -i -e \"$a\\\"' /etc/selinux/config').",
+        "Consider running 'restorecon -R -v /' after fixfiles onboot to relabel the filesystem immediately."
+      ],
+      "security_score": 8,
+      "best_practices_followed": true
+    }
+  ]
+}

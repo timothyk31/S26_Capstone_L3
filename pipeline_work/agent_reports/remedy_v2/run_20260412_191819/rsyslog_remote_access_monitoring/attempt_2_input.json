@@ -1,0 +1,84 @@
+{
+  "vulnerability": {
+    "id": "rsyslog_remote_access_monitoring",
+    "title": "Ensure remote access methods are monitored in Rsyslog",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "Logging of remote access methods must be implemented to help identify cyber attacks and ensure ongoing compliance with remote access policies are being audited and upheld. An examples of a remote access method is the use of the Remote Desktop Protocol (RDP) from an external, non-organization controlled network. The /etc/rsyslog.conf or /etc/rsyslog.d/*.conf file should contain a match for the following selectors: auth.*, authpriv.*, and daemon.*. If not, use the following as an example configuration: auth.*;authpriv.* /var/log/secure daemon.* /var/log/messages",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core && rpm --quiet -q rsyslog; then declare -A REMOTE_METHODS=( ['auth.*']='^[^#]*auth\\.\\*.*$' ['authpriv.*']='^[^#]*authpriv\\.\\*.*$' ['daemon.*']='^[^#]*daemon\\.\\*.*$' ) declare -A LOCATIONS=( ['auth.*']='/var/log/secure' ['authpriv.*']='/var/log/secure' ['daemon.*']='/var/log/messages' ) if [[ ! -f /etc/rsyslog.conf ]]; then # Something is not right, create the file touch /etc/rsyslog.conf fi # Loop through the remote methods associative array for K in \"${!REMOTE_METHODS[@]}\" do # Check to see if selector/value exists if ! grep -rq \"${REMOTE_METHODS[$K]}\" /etc/rsyslog.*; then APPEND_LINE=$(sed -rn \"/^\\S+\\s+\\${LOCATIONS[$K]}$/p\" /etc/rsyslog.conf) # Make sure we have a line to insert after, otherwise append to",
+    "result": "fail",
+    "rule": "rsyslog_remote_access_monitoring",
+    "oval_id": "xccdf_org.ssgproject.content_rule_rsyslog_remote_access_monitoring",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "rsyslog_remote_access_monitoring",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "Adding or ensuring rsyslog selectors for auth.*, authpriv.*, and daemon.* is a standard logging configuration change that does not affect authentication mechanisms or service availability. It simply enhances audit visibility and is unlikely to cause lockout or system breakage.",
+    "requires_human_review": false,
+    "estimated_impact": "authentication/authorization affected",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "rsyslog_remote_access_monitoring",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 37.69418478012085,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 13.918,
+          "review_qa_seconds": 23.775,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We're required to remediating one OpenSCAP finding: ensure rsyslog remote access monitoring. Must use only provided tools: run_cmd, read_file, write_file. Must not chain commands.\n\nWe need to add log selectors to rsyslog config: auth.*, authpriv.*, daemon.*. Typical config lines: auth.*;authpriv.* /var/log/secure and daemon.* /var/log/messages.\n\nWe must check /etc/rsyslog.conf or /etc/rsyslog.d/*.conf. The recommended approach is to add lines to /etc/rsyslog.conf. If file missing, create it. We need to read file first, see if lines already exist. Also need to ensure idempotency: avoid duplicate lines. Prefer minimal change: if config already contains lines then nothing.\n\nWe'll propose a plan: read /etc/rsyslog.conf. If file doesn't exist, create with minimal config. Check if each required selector line exists (pattern). If missing, append.\n\nWe have to use read_file, and later write_file or sed -i. But rule: \"Do NOT duplicate config lines. Modify existing values in-place with sed.\" Since we may need to uncomment existing but commented lines.\n\nThus we should search for e.g. '^#?auth\\.\\\\*;\\?authpriv\\\\.*\\s*/var/log/secure' maybe test. If commented line present, uncomment and adjust. If none, append lines.\n\nThus plan: \n\n1. read /etc/rsyslog.conf. \n2. If not exist, create file with two lines:\nauth.*;authpriv.* /var/log/secure\ndaemon.* /var/log/messages\n3. If file exists, grep for each selector. If line exists and not commented, no change. If commented (line starts with '#'), use sed to uncomment. If not present, append.\n\nWe are told to prefer minimal reversible changes. So we add a comment at the top: # Monitoring of remote access methods added by remediation. Or similar.\n\nWe need to use run_cmd to run single commands. But using sed -i to modify lines. We'll call run_cmd for sed operations. Must read_file first to examine.\n\nBetter to produce a single line for each missing or commented line.\n\nWe can perform this as commands: run_cmd \"sed -i 's/^#auth\\\\.*;authpriv\\\\.* /auth.*;authpriv.* /' /etc/rsyslog.conf\" etc. But concrete safe sed. Might need extended regex.\n\nBut safe approach: use grep to detect. Use run_cmd 'grep -qE \"^[[:space:]]*auth\\\\..*authpriv\\\\..* /var/log/secure\" /etc/rsyslog.conf && echo present'. But the instructions: can't chain with &&. Must use single command. But we can use separate commands. For example, run_cmd to run 'grep -E \"pattern\" file' and use exit_code and stdout to decide. But we cannot use conditional in one line. We can use separate run_cmd calls: first run grep, then based on exit code, decide if need to modify. The system will store the response.\n\nThus plan will include steps.\n\nWe need to produce plan for review_plan.\n\nThus in response: we produce a plan description. Then call review_plan. Then, if approved, proceed.\n\nLet's craft plan description.\n\nWe will modify /etc/rsyslog.conf. We'll ensure needed selectors. We'll read file. We'll check for presence of lines.\n\nSteps:\n\nPhase 1: Ensure /etc/rsyslog.conf exists. Use run_cmd \"test -f /etc/rsyslog.conf || touch /etc/rsyslog.conf\".\n\nActually we need to use run_cmd single shell command. But we can do it with a command like: bash -c 'test -f /etc/rsyslog.conf || touch /etc/rsyslog.conf'? But no mention of using bash -c? We can pass \"sh -c '...'\"? The tool expects a shell command string. We can use \"sh -c '...'\". It's okay? Likely treat as shell command. Might allow us to chain. But rule says no chaining with && or ; or multiline. But we can use sh -c? The instructions: \"Use run_cmd for EXACTLY ONE shell command at a time. Do NOT chain with && ; or multiline scripts.\" So we cannot do that. So we need separate command: run_cmd \"test -f /etc/rsyslog.conf\". Then separate logic: if exit_code not 0, we need to create file. Use write_file or run_cmd \"touch /etc/rsyslog.conf\". We need to open file. We can use write_file with empty content.\n\nBut simpler: we can use read_file on /etc/rsyslog.conf; if not exist, read_file returns error? Not sure but we can handle.\n\nBetter: we can use read_file; if returns null? We can decide.\n\nLet's proceed: call read_file. If content empty? Not exist? Might error. We can catch. But for plan we can mention.\n\nAlternative: use run_cmd \"touch /etc/rsyslog.conf\". That will create file if missing, but also will update timestamp if exists. It's idempotent. So we run that.\n\nBut we cannot chain with touch? It's okay. Use single command \"touch /etc/rsyslog.conf\". That's fine. It will not modify content.\n\nYes do that.\n\nThen read_file again.\n\nAlright.\n\nNow check for each selector.\n\n1. auth.*;authpriv.* line: pattern: \"auth.*;authpriv.* /var/log/secure\" (maybe with spaces). We need to check presence regardless of whitespace variations. Use grep -E.\n\nWe can do run_cmd \"grep -E '^[[:space:]]*(auth\\\\..*;authpriv\\\\..*)[[:space:]]+/var/log/secure[[:space:]]*$' /etc/rsyslog.conf\". This will check presence if uncommented. If grep exit code 0, do nothing. If not found, we need to check for commented line: grep -E '^#.*auth.*;authpriv.* /var/log/secure'.\n\nBut we can combine logic: if grep -E '^#.*auth.*;authpriv.* /var/log/secure' is found, we'll uncomment.\n\nBut we might need sed to uncomment: sed -i 's/^#\\s*auth.*;authpriv.* /auth.*;authpriv.* /' file.\n\nBut due to variations, maybe better to first add lines to file unconditionally with commented markers? Simpler: Append lines at the end if missing. Even if duplicate lines exist but we need to avoid duplicates. So first check if lines exist ignoring comment. If not, append. That suffices. If there's a commented line, we don't need to append; but we might want to uncomment. But the requirement says \"If a line is commented (e.g. '# minlen = 8'), uncomment it and set the value.\" The phrase may apply to all patterns; but we can manually uncomment commented lines to active. In our context, if we see a commented line 'auth.*;authpriv.* /var/log/secure', it would be better to uncomment.\n\nSo plan: check for line present: grep -E \"^[[:space:]]*auth\\\\..*;authpriv\\\\..* /var/log/secure\". If found, no action. Else check for commented variant: grep -E \"^[[:space:]]*#.*auth.*;authpriv.* /var/log/secure\". If found, we run sed -i 's/^[[:space:]]*#\\s*auth.*;authpriv.* /auth.*;authpriv.* /' file to uncomment. Else we append the line.\n\nSimilarly for daemon.* line: pattern \"daemon.* /var/log/messages\".\n\nTherefore final plan: we use read_file; if content missing, we create file. Then do checks for each selector.\n\nWe will output the plan description to review_plan.\n\nLet's craft now.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "Review output was not valid JSON. Raw: {\"finding_id\":\"rsyslog_remote_access_monitoring\",\"is_optimal\":false,\"approve\":true,\"feedback\":\"The plan will add the required logging selectors to rsyslog, achieving the vulnerability mitigation. Howe...",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "rsyslog_remote_access_monitoring",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "Review output was not valid JSON. Raw: {\"finding_id\":\"rsyslog_remote_access_monitoring\",\"is_optimal\":false,\"approve\":true,\"feedback\":\"The plan will add the required logging selectors to rsyslog, achieving the vulnerability mitigation. Howe...",
+      "concerns": [
+        "Could not parse LLM response"
+      ],
+      "suggested_improvements": [],
+      "security_score": null,
+      "best_practices_followed": false
+    }
+  ]
+}

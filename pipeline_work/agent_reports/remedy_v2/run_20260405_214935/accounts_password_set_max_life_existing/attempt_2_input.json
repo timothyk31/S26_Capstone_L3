@@ -1,0 +1,92 @@
+{
+  "vulnerability": {
+    "id": "accounts_password_set_max_life_existing",
+    "title": "Set Existing Passwords Maximum Age",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "Configure non-compliant accounts to enforce a -day maximum password lifetime restriction by running the following command: $ sudo chage -M USER",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then var_accounts_maximum_age_login_defs='' while IFS= read -r i; do chage -M $var_accounts_maximum_age_login_defs $i done < <(awk -v var=\"$var_accounts_maximum_age_login_defs\" -F: '(/^[^:]+:[^!*]/ && ($5 > var || $5 == \"\")) {print $1}' /etc/shadow) else >&2 echo 'Remediation is not applicable, nothing was done' fi",
+    "result": "fail",
+    "rule": "accounts_password_set_max_life_existing",
+    "oval_id": "xccdf_org.ssgproject.content_rule_accounts_password_set_max_life_existing",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "accounts_password_set_max_life_existing",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "The remediation involves updating password expiration settings via chage, a standard STIG hardening practice that does not risk system lockout or critical service disruption.",
+    "requires_human_review": false,
+    "estimated_impact": "authentication/authorization affected; Users may be prompted to change passwords soon after remediation",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "accounts_password_set_max_life_existing",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 71.94550514221191,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 48.511,
+          "review_qa_seconds": 23.431,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to plan remediation for accounts_password_set_max_life_existing. We need to set maximum password age for existing accounts. The described script sets var_accounts_maximum_age_login_defs to '' (empty?) Actually seems wrong. Typical variable is e.g., var_accounts_maximum_age_login_defs=90. To set max age for all accounts with more than current days? The script resets var to empty? Maybe the policy is to set maximum aged to default e.g. 90. But we just need to modify script? Actually the Remediation script given is wrong by setting var to '' empty. That will run chage -M '' which could cause error. The script may be a placeholder. For simple remediation, we could:\n\n- Determine desired maximum age from /etc/login.defs? Actually rule: Set Existing Passwords Maximum Age. Usually it sets \"PASS_MAX_DAYS\" in /etc/login.defs to a value like 90. But \"existing accounts\" need to be updated. So we should run chage -M <max_age> for each user with password expiry > max_age. But we need to decide what value? The rule doesn't specify a default. The variable likely defined earlier? There's no variable provided. In typical STIG, var_accounts_maximum_age_login_defs = 90 or 60; but not defined. The remediation script suggests setting var to ''? Hmm.\n\nThe rule ID: accounts_password_set_max_life_existing. Usually variable var_accounts_maximum_age_login_defs is defined e.g., 90. But here the script incorrectly sets var to ''.\n\nThus, to remediate, we can set the maximum age to some value e.g., 90 days.\n\nBut the detection is the script. We should produce plan: read /etc/login.defs, find PASS_MAX_DAYS. If not set, we write it.\n\nBut the rule says \"Set Existing Passwords Maximum Age\". So we need to adjust accounts' expiry via chage.\n\nSo plan: variable var_accounts_maximum_age_login_defs defined elsewhere. For remediation, we set a specific value. The problem: we don't know the value. maybe the existence of appraisal suggests it's empty. Let's just set var to 90 via variable. Use known default or ask? But we can't ask user. So we'll assume var default of 90.\n\nThus script: var_accounts_maximum_age_login_defs=90\n\nThen apply to accounts with expiration older or empty? Actually the script uses awk to find accounts where $5 > var or $5 empty. But $5 in /etc/shadow is last change? Actually format: name:password:last_change:min:max:warn:inactive:expire...\n\n$5 is last change? Wait, sequence: $3 is last change days since epoch. $5 is max days. So script seems to find accounts where max days > var or max days empty. Then run chage -M var to update them.\n\nThus we need to set var and run script accordingly.\n\nOk.\n\nThus plan: 1) create file /etc/ssh/?? Wait, just run commands to get current var and apply.\n\nWe need to read /etc/shadow to check which accounts have max days > var or empty. Then run chage for each.\n\nHowever we need to comply with guidelines: Use run_cmd only for a single command at a time. We can run a loop? but guidelines: no multi-line. But we can run a one-liner command like $(awk...) and for each output run chage. But may require iteration: we can use a for loop in a single shell command: for i in $(awk ...); do chage -M 90 $i; done.\n\nThus we can do that.\n\nBut maybe we should modify /etc/login.defs to ensure PASS_MAX_DAYS is set to 90.\n\nWe should first read /etc/login.defs to check. If no PASS_MAX_DAYS line, we add it.\n\nBut guidelines: we need to use read_file to inspect before modifying. We can then write to file.\n\nOk.\n\nPlan: 1) Read /etc/login.defs. If PASS_MAX_DAYS not set or set incorrectly, set to 90. We'll modify that file accordingly.\n\n2) Then run a command that identifies accounts with max days > 90 or empty, and then chage -M 90 for each.\n\nThus final.\n\nLet's write plan in detail.\n\nSequence:\n\n- Inspect /etc/login.defs. Use read_file to retrieve content. Look for PASS_MAX_DAYS. Use sed -i to modify existing value. If no such line, use write_file to add at end.\n\n- Then run command: var_accounts_maximum_age_login_defs=90; while IFS= read -r i; do chage -M 90 $i; done < <(awk -v var=\"$var_accounts_maximum_age_login_defs\" -F: '(/^[^:]+:[^!*]/ && ($5 > var || $5 == \"\")) {print $1}' /etc/shadow)\n\nBut we need to include this entire just one command? But it includes process substitution (< <(...)). That might be considered a single command? It's a single command execution: the shell expands. That's fine.\n\nHowever guidelines: run_cmd is used to run exactly one command at a time. As long as we don't chain multiple commands with ;, but we use a while loop inside the same command. It's one command string. Should we separate the variable assignment? We must ensure it's one command string. We can put the `while` loop and; use backticks? A single string.\n\nAlternatively we can run a one-liner: var_accounts_maximum_age_login_defs=90; for i in $(awk ...); do chage -M 90 $i; done\n\nOk.\n\nWe might need to use chage without root? We are root.\n\nAlso be careful that chage may ask to confirm with -w? but -M is fine.\n\nAlright.\n\nNow plan: create a fallback, but not modify /etc/ssh. Ok.\n\nNow we proceed: In analysis, we propose plan.\n\nOnce done, we call review_plan with plan description.\n\nWhen approved, we run commands sequentially: read_file etc.\n\nWe need to form plan exactly.\n\nLet's produce plan.\n\n",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "The script incorrectly sets the maximum password age variable to an empty string and then attempts to use it as a numeric value in the chage command, which will fail or misconfigure accounts. This does not resolve the vulnerability and may actually break password expiration settings.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "accounts_password_set_max_life_existing",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "The script incorrectly sets the maximum password age variable to an empty string and then attempts to use it as a numeric value in the chage command, which will fail or misconfigure accounts. This does not resolve the vulnerability and may actually break password expiration settings.",
+      "concerns": [
+        "Undefined/empty value for var_accounts_maximum_age_login_defs leading to invalid chage usage",
+        "No validation that users have passwords before applying chage",
+        "Potential to overwrite correct max age values with incorrect defaults"
+      ],
+      "suggested_improvements": [
+        "Assign a proper numeric maximum age (e.g., 90) to var_accounts_maximum_age_login_defs before loop",
+        "Add checks to ensure the value is numeric and non-empty before calling chage",
+        "Validate that the user has a password set before running chage",
+        "Document the intended maximum age policy and include it in the script",
+        "Test the script in a safe environment before deployment"
+      ],
+      "security_score": 3,
+      "best_practices_followed": false
+    }
+  ]
+}

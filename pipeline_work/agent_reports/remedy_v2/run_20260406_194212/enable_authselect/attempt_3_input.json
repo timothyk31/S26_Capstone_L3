@@ -1,0 +1,155 @@
+{
+  "vulnerability": {
+    "id": "enable_authselect",
+    "title": "Enable authselect",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "Configure user authentication setup to use the authselect tool. If authselect profile is selected, the rule will enable the profile.",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then var_authselect_profile='' authselect current if test \"$?\" -ne 0; then if { rpm --quiet -q kernel rpm-ostree bootc && ! rpm --quiet -q openshift-kubelet && { [ -f \"/run/.containerenv\" ] || [ -f \"/.containerenv\" ]; }; }; then authselect select --force \"$var_authselect_profile\" else authselect select \"$var_authselect_profile\" fi if test \"$?\" -ne 0; then if rpm --quiet --verify pam; then authselect select --force \"$var_authselect_profile\" else echo \"authselect is not used but files from the 'pam' package have been altered, so the authselect configuration won't be forced.\" >&2 fi fi fi else >&2 echo 'Remediation is not applicable, nothing was done' fi",
+    "result": "fail",
+    "rule": "enable_authselect",
+    "oval_id": "xccdf_org.ssgproject.content_rule_enable_authselect",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "enable_authselect",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "Enabling authselect is a standard STIG hardening step for authentication configuration and is unlikely to cause lockout or system breakage.",
+    "requires_human_review": false,
+    "estimated_impact": "authentication/authorization affected; Potential for misconfiguration leading to authentication failures",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 3,
+  "previous_attempts": [
+    {
+      "finding_id": "enable_authselect",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 41.79244947433472,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 23.389,
+          "review_qa_seconds": 18.401,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to remediate enabling authselect. The rule is enable_authselect. We must set authselect configuration. Usually to enable authselect, we need to run \u201cauthselect select [profile]\u201d to set up the profile. The recommendation script is given and somewhat truncated. We need to choose a profile. The variable var_authselect_profile is empty in script, meaning default is 'sshd' maybe? Actually authselect default profile is 'sshd'. But to be safe, we might use \"sudo authselect select sssd --force\" or \"authselect select --force sssd\"? Wait the default is \"sshd\" which uses system users. But STIG often uses \"nss\" for best. But we need to follow existing remediation script: var_authselect_profile=\"\" (empty) then runs authselect current if test \"$?\" -ne 0; then some conditions. It runs \"authselect select --force $var_authselect_profile\". If var_authselect_profile empty then this command would produce error because empty profile; but since the script is truncated, maybe they fill later.\n\nBut for remediation we can set a specific default secure profile. According to SUSE packages, \"authselect select sssd\" or \"authselect select sssd --force\". But in Cloud SSG, the recommended profile is \"ssh\" or \"sshd\"? On RHEL, typical authselect profiles: \"sshd\", \"standard\", \"wordpress\", \"tuna\" ? Actually from RHEL 7, the profiles include: \"sshd\", \"sshd-meme\". Wait we need to research. Use knowledge: Authselect is a tool to manage PAM and NSS config. Standard practice: \"authselect select sssd\" is used to configure NSS and PAM for SSSD. But for generic SSG, they use \"authselect select std --force\" maybe? Not sure.\n\nGiven the task: \"Enable authselect\" means to use authselect instead of manual PAM config, so we need to run \"authselect select\" or \"authselect enable\" commands.\n\nI think the remediation is to ensure that the /etc/authselect/config file indicates that authselect used.\n\nOn RHEL 8, default is authselect as option. But maybe they don't enable it, but we just need to run authselect current? The rule says \"Configure user authentication setup to use the authselect tool. If authselect profile is selected, the rule will enable the profile.\" So we need to select a profile if none selected. So the script basically chooses profile variable (var_authselect_profile). And runs 'authselect select' accordingly. So we just run 'authselect' as root to set a profile.\n\nBut we need to choose a safe profile. Use \"authselect select sssd --force\" or \"authselect select std\" etc. Which one is defined? I will inspect typical RHEL 8 default: 'authselect current' returns 'sshd'. If no profile, it may say \"No currently selected policy\". So we will select 'sshd' or 'standard'.\n\nGiven rule states enabling authselect is standard STIG step, maybe they want to enable the default profile \"sshd\". That would be safe and minimal. So we can run: `authselect select --force sssd`? Wait 'authselect select sssd' might require 'sssd' profile exist. But I'm not sure if it's available by default. It might not. So safer is to select the default 'sshd'.\n\nLet's check: On RHEL 8, `authselect list` shows: \"fe-latest-sshd\", \"fe-latest-sshd-ldap\". But not 'sshd'. Hmm.\n\nGiven we can't run commands here, but we can approximate.\n\nLet's pick a widely available profile: 'sshd' is probably included. Let's inspect typical RHEL 8: 'authselect list' output: maybe 'fe-latest-sshd', 'fe-latest-ng', 'regular', 'password'. But not sure.\n\nSimplify: we can run `authselect select --force sssd`? But that may fail if not exist.\n\nAlternatively run `authselect select ee-file`? No.\n\nI think the STIG for RHEL 8 expects to run `authselect select --force sssd`? Actually the STIG for RHEL 8 defines \"authselect profile sssd\" as default.\n\nCheck though: Common STIG for CoreOS: 'var_authselect_profile' maybe set by STIG.\n\nI think we should programmatically check if any profile exists. But we cannot run commands.\n\nBut we can just run: `authselect select --force sssd`. If fails, we can call again with other fallback.\n\nBut we cannot interactively check.\n\nMaybe we can set 'authselect select --force sssd' but this will be a change.\n\nBut we can also run `authselect --force disable`? No.\n\nBetter: Check if /etc/pam.d/system-auth exists but no config from authselect? Hard.\n\nThe rule says \"Enabling authselect is a standard STIG hardening step for authentication configuration\". You just need to ensure that the system uses authselect. If it's not already, run `authselect select --force sssd`. So we will use that.\n\nImplementation: Use run_cmd to run command.\n\nWe need to first read /etc/pam.d/system-auth to confirm if any config indicates authselect. Usually if authselect is used, there is a file like /etc/pam.d/system-auth saved under /etc/authselect/. But just selecting a profile uses PAM templates. We can check existence of /etc/authselect/context. But they didn't provide file reading.\n\nSimplify: Always run `authselect current` to check if a profile selected. If it returns error, it's not selected.\n\nBut we can't parse output. However we may run `authselect current` and ignore exit code. But if not selected, it will exit 0? Actually 'authselect current' prints current profile or says '-none-'. But it returns 0. So we cannot differentiate.\n\nGiven the constraints, we might just run `authselect select --force sssd`.\n\nBut if this fails due to missing profile, the remediation may not succeed, possibly causing non-compliance.\n\nAlternatively we can emulate the recommendation script with variable var_authselect_profile set by the STIG. In the script, var_authselect_profile='' may be replaced by a value by the profiler. Might not be defined.\n\nThe rule likely expects to set var_authselect_profile to 'sshd' or 'nss' etc. We can set a default.\n\nWe will proceed with the safe profile: 'sshd'.\n\nThus plan: Run `authselect current` to see if a profile is set? We cannot parse, but anyway.\n\nWe'll just run `authselect select --force sssd`.\n\nImplementation: We cannot chain multiple commands; we need to do step-by-step.\n\nFirst we will attempt to determine if a profile already selected. By reading the /etc/pam.d/system-auth could show presence of 'authselect'. But not reliable.\n\nBut we can just run `authselect current` to see if a profile exists before selecting. But this is just command, no output effect.\n\nLet's do plan: \n1. run_cmd \"authselect current\"\n2. run_cmd \"authselect select --force sssd\"\n\nBut we must check if 'authselect' command exists; but we assume yes.\n\nThe rule also says \"recommendation script\". Maybe better to run exactly the script? The script is complicated. But we can approximate.\n\nBut minimises risk: just run `authselect select --force sssd`.\n\nOk.\n\nThus our plan description: We'll run `authselect select --force sssd` to select the 'sshd' profile. This meets enabling authselect. We might run `authselect current` first just for observation.\n\nBut we don't need to modify any file; just run the command.\n\nNow we need to call review_plan first.\n\nLet's provide a review plan description accordingly.",
+          "content": null
+        }
+      ]
+    },
+    {
+      "finding_id": "enable_authselect",
+      "attempt_number": 2,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 19.68564796447754,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 9.577,
+          "review_qa_seconds": 10.104,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We need to propose plan. Must follow workflow: Plan first, call review_plan. The plan: enable authselect, but must be safe. We need to check if authselect available, check sssd profile exists, check current profile, only change if needed. Use run_cmd individually for each step. We'll need a plan: using bash script? We provide plan description. Then maybe script steps: read /etc/security/authselect. Let's do plan:\n\nPlan steps:\n\n1. Check if authselect command exists.\n2. Check if sssd profile exists on system: `authselect list | grep -qw sssd` (if not, abort with error).\n3. Determine current profile: `authselect current --print`. It outputs lines like `current: sssd`. Use stdout to get current. If current is sssd, skip.\n4. If current is not sssd, run `authselect select sssd --force` (use --force if existing etc). We'll just use `authselect select sssd` maybe not --force. If there's need to force? We simply use \"authselect select sssd\" (no force). It will apply. This may require editing. After selecting, we might need to reload PAM (service? maybe restart). Not needed.\n\nImplementation plan: We will use run_cmd for each step. But the policy: use read_file to inspect config file before modifying, but not relevant.\n\nWe'll provide final plan: commands to run in sequence:\n\n1. Check authselect: if not found exit with message. This is part of script, but we can't chain commands. We could run a one-liner that checks, but that's okay.\n\nWe might create a shell script containing these steps, but we have to use single run_cmd commands. We could run a shell that executes multiple commands with ;. But rule says do not chain with && ; or multiline scripts. But no mention of ';'. Actually \"Do NOT chain with && or ; or multiline scripts.\" It's ambiguous. It's likely they mean don't chain commands with && or ; and can't do multiline scripts. So we can't run multiple commands in one run_cmd. But we can call multiple run_cmd sequentially in the plan, but our plan is just describing how to do it, not executing yet.\n\nThus in plan we can describe that. We'll plan to execute step by step. But we will not provide actual commands now, just description.\n\nThus the plan: Use run_cmd to check presence, etc. Ensure no lockout. Write plan details.\n\nNow call review_plan.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "Switching to the sssd authselect profile on a system that is not already configured to use it can remove the pam_unix module and other local authentication methods, potentially causing local logins and SSH access to fail if the sssd service is not properly installed, configured, or running. This can result in a critical lockout of legitimate users, which is considered a real damage scenario. The plan does not include a backup or rollback mechanism and does not explicitly handle service restarts or verify that sssd is operational before applying the change.",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "enable_authselect",
+      "is_optimal": false,
+      "approve": true,
+      "feedback": "The plan will enable authselect by selecting the sssd profile, which satisfies the vulnerability requirement. However, it lacks checks for the existence of authselect and the sssd profile, and does not handle error conditions gracefully. Based on the STIG context, the minimal approach is acceptable but could be improved for robustness.",
+      "concerns": [
+        "No pre-check for whether authselect is installed or active.",
+        "No verification that the sssd profile exists on the system.",
+        "No conditional logic to avoid unnecessary re-selection if the correct profile is already active.",
+        "No handling of potential errors or non-zero exit status of authselect commands.",
+        "No notification or reloading of services that depend on PAM after profile change."
+      ],
+      "suggested_improvements": [
+        "Check if `authselect` is available: `if ! command -v authselect >/dev/null 2>&1; then echo 'authselect not installed' >&2; exit 1; fi`",
+        "Verify the desired profile exists: `if ! authselect list | grep -qw sssd; then echo 'sssd profile not available' >&2; exit 1; fi`",
+        "Determine current profile with `authselect current` and only run `authselect select` if the current profile differs or when forcing is acceptable.",
+        "Add error handling: capture exit status and output informative messages.",
+        "After selecting profile, consider reloading PAM stack or restarting affected services if required.",
+        "Optionally use `authselect select --force sssd` only if override or environment requires it; otherwise use `authselect select sssd`."
+      ],
+      "security_score": 8,
+      "best_practices_followed": true
+    },
+    {
+      "finding_id": "enable_authselect",
+      "is_optimal": false,
+      "approve": true,
+      "feedback": "This plan addresses the core requirement\u2014selecting the sssd authselect profile\u2014while safeguarding against unnecessary changes and ensuring the tool and profile exist before proceeding. However, it could be enhanced by explicitly handling service restarts (e.g., sshd) after the profile change and by adding more robust error handling and logging around the authselect command output.",
+      "concerns": [
+        "No explicit restart or reload of services that consume PAM configurations (e.g., sshd) after selecting a new profile.",
+        "Limited error handling for the authselect output; a non\u2011zero exit status is only logged, but no additional diagnostic is collected.",
+        "The plan does not verify that the selected profile (sssd) is fully compatible with the system's existing configuration; a forced selection may still produce odd behavior if constraints are violated.",
+        "No explicit backup of the current authselect state before making the change, limiting reversibility.",
+        "The check for the existence of authselect uses a placeholder \u201cif not present exit\u201d \u2013 in practice this should be a concrete command like `command -v authselect`."
+      ],
+      "suggested_improvements": [
+        "Add a step to restart or reload services that use PAM (e.g., `systemctl restart sshd`) after `authselect select sssd` to ensure changes take effect immediately.",
+        "Capture and log the full output of `authselect select` to aid debugging if the command fails.",
+        "Introduce a backup of the current authselect profile (e.g., `authselect backup`) before performing the change, so the previous state can be restored if needed.",
+        "Validate that the sssd profile is compatible with system packages (e.g., ensure necessary PAM modules are present).",
+        "Enhance error handling by checking both exit status and stderr output, and providing actionable messages for remediation."
+      ],
+      "security_score": 8,
+      "best_practices_followed": true
+    }
+  ]
+}

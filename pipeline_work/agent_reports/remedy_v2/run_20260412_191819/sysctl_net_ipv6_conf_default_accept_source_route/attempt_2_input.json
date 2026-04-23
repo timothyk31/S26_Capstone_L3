@@ -1,0 +1,84 @@
+{
+  "vulnerability": {
+    "id": "sysctl_net_ipv6_conf_default_accept_source_route",
+    "title": "Disable Kernel Parameter for Accepting Source-Routed Packets on IPv6 Interfaces by Default",
+    "severity": "2",
+    "cvss": null,
+    "host": "localhost",
+    "port": null,
+    "protocol": null,
+    "description": "To set the runtime status of the net.ipv6.conf.default.accept_source_route kernel parameter, run the following command: $ sudo sysctl -w net.ipv6.conf.default.accept_source_route=0 To make sure that the setting is persistent, add the following line to a file in the directory /etc/sysctl.d: net.ipv6.conf.default.accept_source_route = 0",
+    "recommendation": "Remediation script: # Remediation is applicable only in certain platforms if rpm --quiet -q kernel-core; then # Comment out any occurrences of net.ipv6.conf.default.accept_source_route from /etc/sysctl.d/*.conf files for f in /etc/sysctl.d/*.conf /run/sysctl.d/*.conf /usr/local/lib/sysctl.d/*.conf; do # skip systemd-sysctl symlink (/etc/sysctl.d/99-sysctl.conf -> /etc/sysctl.conf) if [[ \"$(readlink -f \"$f\")\" == \"/etc/sysctl.conf\" ]]; then continue; fi matching_list=$(grep -P '^(?!#).*[\\s]*net.ipv6.conf.default.accept_source_route.*$' $f | uniq ) if ! test -z \"$matching_list\"; then while IFS= read -r entry; do escaped_entry=$(sed -e 's|/|\\\\/|g' <<< \"$entry\") # comment out \"net.ipv6.conf.default.accept_source_route\" matches to preserve user data sed -i --follow-symlinks \"s/^${escaped_entry}$/# &/g\" $f done <<< ",
+    "result": "fail",
+    "rule": "sysctl_net_ipv6_conf_default_accept_source_route",
+    "oval_id": "xccdf_org.ssgproject.content_rule_sysctl_net_ipv6_conf_default_accept_source_route",
+    "scan_class": "compliance",
+    "os": "localhost.localdomain"
+  },
+  "triage_decision": {
+    "finding_id": "sysctl_net_ipv6_conf_default_accept_source_route",
+    "should_remediate": true,
+    "risk_level": "low",
+    "reason": "Disabling source routing on IPv6 interfaces is a standard hardening practice that does not affect authentication, authorization, or critical services. The change is a simple sysctl setting and can be applied at runtime without risk of lockout.",
+    "requires_human_review": false,
+    "estimated_impact": "networking affected; Potential impact on legacy applications that may rely on source routing (rare)",
+    "estimated_complexity": "low"
+  },
+  "attempt_number": 2,
+  "previous_attempts": [
+    {
+      "finding_id": "sysctl_net_ipv6_conf_default_accept_source_route",
+      "attempt_number": 1,
+      "commands_executed": [],
+      "files_modified": [],
+      "files_read": [],
+      "execution_details": [],
+      "scan_passed": false,
+      "scan_output": null,
+      "attempt_duration": 18.79762887954712,
+      "scan_duration": null,
+      "success": false,
+      "error_summary": null,
+      "llm_verdict": {
+        "message": "",
+        "resolved": false
+      },
+      "llm_metrics": {
+        "total_llm_api_seconds": 0,
+        "total_command_execution_seconds": 0,
+        "llm_calls": 1,
+        "per_turn": [],
+        "step_durations": {
+          "plan_fix_seconds": 16.934,
+          "review_qa_seconds": 1.861,
+          "apply_fix_seconds": 0.0
+        },
+        "review_rejections": 1,
+        "review_plan_capped": true
+      },
+      "reasoning_messages": [
+        {
+          "turn": 1,
+          "reasoning": "We must remediate the finding: set net.ipv6.conf.default.accept_source_route=0.\n\nWe should modify /etc/sysctl.d/99-sshd.conf? Actually we should add a file in /etc/sysctl.d.\n\nWe need to check existing sysctl.d files for the parameter; if already set to 0 or commented? Ideally add /etc/sysctl.d/99-sshd.conf or something. But ensure not duplicate lines. We'll add /etc/sysctl.d/99-sshd.local? Use write_file.\n\nWe follow approach: read all config files to ensure not duplicate. Let's read /etc/sysctl.d/99-sshd.conf if exists. If not, create /etc/sysctl.d/99-sshd.conf with line net.ipv6.conf.default.accept_source_route = 0.\n\nAlso we need to ensure at runtime: run sysctl -w net.ipv6.conf.default.accept_source_route=0.\n\nWe must do actions: run_cmd to set runtime. Use read_file on /etc/sysctl.d/*.conf to find duplicates? Simpler: check if any file contains parameter. For each file path in /etc/sysctl.d/*.conf. But reading many files may be many commands. We can search broadly.\n\nmaybe use grep -r? But we can't run shell commands multiple? We can run one command: run_cmd \"grep -Rhoo 'net.ipv6.conf.default.accept_source_route' /etc/sysctl.d | head\". But we need to modify existing if present. Let's check /etc/sysctl.d/*.conf. Without chain? We can run e.g. run_cmd \"grep -R 'net.ipv6.conf.default.accept_source_route' /etc/sysctl.d/*.conf\". That's one command. But we want to read file content individually to modify with sed.\n\nBut we can just add a new file. Ensure not duplicate? If duplicate lines, that may cause conflict. But we can comment duplicate lines perhaps. But we can check if parameter present in any file using grep.\n\nPlan: 1) Remove any existing uncommitted lines? choose to comment out if set to other value. So we'll read each file and modify.\n\nHowever simpler: We'll just create /etc/sysctl.d/60-sshd_source_route.conf with the line.\n\nWe need to guarantee that it is persistent. Write file and then run sysctl --system to reload? But OK.\n\nProcedure: \n- Use run_cmd \"sysctl -w net.ipv6.conf.default.accept_source_route=0\" to set runtime.\n- Then write file \"/etc/sysctl.d/60-sshd_source_route.conf\" with content: \"net.ipv6.conf.default.accept_source_route = 0\\n\".\n\nBut check existing file duplicates? Let's check if any file already has it. We'll read file first: run_cmd \"grep -R 'net.ipv6.conf.default.accept_source_route' /etc/sysctl.d\" but output not needed. Let's just add. Minimal risk: if duplicate, system will prefer highest precedence? It uses numeric ordering. Could lead to duplicate values but same 0, no harm. But safe to check before writing. But let's create file but if exists, need to modify? read_file path may not exist.\n\nBetter: try reading /etc/sysctl.d/60-sshd_source_route.conf. If not exist, write. If exist, ensure line set. If content contains parameter, modify with sed.\n\nWe need to use read_file? To inspect.\n\nWe can read the file path that we plan to modify. Use read_file if exists: read_file with path. But read_file returns error if not exist? We can handle.\n\nThus the plan: \n- Determine path: /etc/sysctl.d/60-sshd_source_route.conf\n- read_file that path; if content includes \"net.ipv6.conf.default.accept_source_route\", modify it else write new file.\n\nSimpler: always write file using write_file with same content; but if file exists with same content, it's fine. If exists with different value, writing will override. But need to check duplicates? The rule says not to duplicate lines.\n\nWe can just write file with the line. If file existed, we override content. That might not duplicate. Provided no other instance in other file. But risk of duplicate in other files. However rule didn't ask to comment all others. Might be acceptable if duplicate again with same value. But better comment other occurrences.\n\nWe could grep -R and if any other occurrence, comment them.\n\nBut due to limited tool, we can search across /etc/sysctl.d/*.conf. Let's run grep for pattern. But need to parse. We can't easily loop. Maybe rely on kernel selection: The file with highest priority includes the value. If others also set, later ones may override earlier. But order numeric ascending. 60 file may come after 99? Actually numeric ascending means lowest number first. 60 comes before 99. So if others set to something else, 60 will override earlier values, but later ones may override 60. So if any later file (e.g., 99) sets to something else, it will override. So we should create file with high number to ensure precedence. Use 99? But 99 exists maybe. Let's use 222? The order ascending: largest number last. So create 999 to be last. In sysctl, order is ascending numeric, so 999 would be processed after any file 100. That means it will override earlier. So we create 999; that's good.\n\nThus create /etc/sysctl.d/999-sysctl.conf with the line. That ensures override.\n\nOk plan. So:\n\n1. Set runtime: run_cmd \"sysctl -w net.ipv6.conf.default.accept_source_route=0\".\n2. Create file /etc/sysctl.d/999-sysctl.conf if not exist or ensure content: \"net.ipv6.conf.default.accept_source_route = 0\".\n\nBut need read_file? We may not check existence. Just write file. \"write_file\" will create with provided content. If file exists with same value, it's safe. If exists with different value, overriding will set to 0.\n\nThus minimal.\n\nWe'll need review plan.\n\nLet's write plan.",
+          "content": null
+        }
+      ]
+    }
+  ],
+  "review_feedback": "Review output was not valid JSON. Raw: {\"finding_id\":\"sysctl_net_ipv6_conf_default_accept_source_route\",\"is_optimal\":false,\"approve\":false,\"feedback\":\"The proposed script only comments out existing non-commented lines containing the parame...",
+  "plan_text": null,
+  "previous_review_verdicts": [
+    {
+      "finding_id": "sysctl_net_ipv6_conf_default_accept_source_route",
+      "is_optimal": false,
+      "approve": false,
+      "feedback": "Review output was not valid JSON. Raw: {\"finding_id\":\"sysctl_net_ipv6_conf_default_accept_source_route\",\"is_optimal\":false,\"approve\":false,\"feedback\":\"The proposed script only comments out existing non-commented lines containing the parame...",
+      "concerns": [
+        "Could not parse LLM response"
+      ],
+      "suggested_improvements": [],
+      "security_score": null,
+      "best_practices_followed": false
+    }
+  ]
+}

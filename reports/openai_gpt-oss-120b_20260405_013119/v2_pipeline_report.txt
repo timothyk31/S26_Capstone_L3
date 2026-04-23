@@ -1,0 +1,171 @@
+Multi-Agent Pipeline V2 Report
+Generated: 2026-04-05T01:31:20
+Target Host: 127.0.0.1
+Scan Profile: xccdf_org.ssgproject.content_profile_stig
+================================================================================
+
+Findings processed:              13
+Successful:                      4
+Total failed:                    9
+  Attempted but failed:          4
+  Failed due to discard:         3
+  Failed due to human review:    2
+Success rate (overall):          30.8%
+Success rate (attempted only):   50.0%
+
+Fixed at attempt 1:            3
+Fixed at attempt 2:            1
+Fixed at attempt 3:            0
+
+================================================================================
+
+1. [REVIEW] enable_dracut_fips_module - Enable Dracut FIPS Module
+   Severity: 3  |  Host: localhost
+   Triage: risk=medium, remediate=False
+   Final: requires_human_review  |  Duration: 4.6s
+--------------------------------------------------------------------------------
+
+2. [SKIP] enable_fips_mode - Enable FIPS Mode
+   Severity: 3  |  Host: localhost
+   Triage: risk=critical, remediate=False
+   Final: discarded  |  Duration: 3.5s
+--------------------------------------------------------------------------------
+
+3. [SKIP] sysctl_crypto_fips_enabled - Set kernel parameter 'crypto.fips_enabled' to 1
+   Severity: 3  |  Host: localhost
+   Triage: risk=critical, remediate=False
+   Final: discarded  |  Duration: 4.7s
+--------------------------------------------------------------------------------
+
+4. [FAIL] installed_OS_is_vendor_supported - The Installed Operating System Is Vendor Supported
+   Severity: 3  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #3, scan_passed=False, cmds=2, duration=83.5s
+     - rpm -q rocky-release
+     - dnf list installed rocky-release
+   Review: approve=True, optimal=False, score=7
+   Feedback: The plan correctly identifies the steps needed to confirm that Rocky Linux 10 is vendor supported. However, it could be improved by addressing the concerns raised regarding verifying specific community support mechanisms beyond merely installing the 'rocky-release' package.
+   QA: safe=True, recommendation=Approve
+   Final: failed  |  Duration: 83.6s
+--------------------------------------------------------------------------------
+
+5. [SKIP] partition_for_var_tmp - Ensure /var/tmp Located On Separate Partition
+   Severity: 2  |  Host: localhost
+   Triage: risk=critical, remediate=False
+   Final: discarded  |  Duration: 0.0s
+--------------------------------------------------------------------------------
+
+6. [FAIL] accounts_authorized_local_users - Only Authorized Local User Accounts Exist on Operating System
+   Severity: 2  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #3, scan_passed=False, cmds=9, duration=288.6s
+     - grep -R "var_accounts_authorized_local_users_regex" -n /etc 2>/dev/null
+     - grep -R "accounts_authorized_local_users" /usr/share/xml/scap/ssg/content 2>/dev/null | head
+     - grep -A2 -n "var_accounts_authorized_local_users_regex" -R /usr/share/xml/scap/ssg/content/ssg-rhel9-oval.xml
+     - grep -R "var_accounts_authorized_local_users_regex" /etc 2>/dev/null
+     - grep -R "var_accounts_authorized_local_users_regex" -n /usr/share/xml/scap/ssg/content | head -n 20
+     - grep -A3 -n "<xccdf-1.2:Value id=\"xccdf_org.ssgproject.content_value_var_accounts_authorized_local_users_regex\"" -R /usr/share/xml/scap/ssg/content/ssg-rhel9-ds.xml
+     - grep -R "var_accounts_authorized_local_users_regex" /etc /usr/lib /usr/share 2>/dev/null | head
+     - grep -R "var_accounts_authorized_local_users_regex" /etc -n 2>/dev/null
+     - grep -R "accounts_authorized_local_users" -n /usr/share/xml/scap/ssg/content/ssg-rhel9-*/ | head
+   Review: approve=True, optimal=False, score=6
+   QA: safe=False, recommendation=Investigate
+   Rejection: Removal of users unauthorized by a regex that currently permits only the root account per 'echo '^root$' > /etc/security/var_accounts_authorized_local_users_regex' will likely lead to service outages and lockouts, as it fails to account for other authorized users critical for system operation beyond root.
+   Final: failed  |  Duration: 288.7s
+--------------------------------------------------------------------------------
+
+7. [OK] grub2_admin_username - Set the Boot Loader Admin Username to a Non-Default Value
+   Severity: 3  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #1, scan_passed=True, cmds=6, duration=173.9s
+     - sed -i -r 's/^(#\s*)?set\s+superusers=.*$/set superusers="grubadmin"/' /etc/grub.d/01_users
+     - nl -ba /etc/grub.d/01_users | sed -n '1,200p'
+     - sed -i -r 's/^[ \t]*#?[ \t]*set[ \t]+superusers=.*/set superusers="grubadmin"/' /etc/grub.d/01_users
+     - sed -i -r 's/^(\s*)password_pbkdf2[ \t]+root/\1password_pbkdf2 grubadmin/' /etc/grub.d/01_users
+     - grub2-mkconfig -o /boot/grub2/grub.cfg
+     - grep -i superusers -n /boot/grub2/grub.cfg | head
+   Review: approve=True, optimal=False, score=7
+   Feedback: The proposed plan effectively addresses the vulnerability by setting a non-default superuser for GRUB. It would be beneficial to validate the chosen username does not conflict with existing systems or users and verify the absence of any default superuser accounts that may lead to inadvertent permissions. Confirm the user ID replacement ensures GRUB's password protection functionalities are intact.
+   QA: safe=True, recommendation=Approve
+   Final: success  |  Duration: 180.6s
+--------------------------------------------------------------------------------
+
+8. [FAIL] grub2_password - Set Boot Loader Password in grub2
+   Severity: 3  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #3, scan_passed=False, cmds=10, duration=414.6s
+     - password=$(openssl rand -base64 12); printf "%s\n%s\n" "$password" "$password" | grub2-setpassword
+     - which grub2-setpassword
+     - printf "test
+test
+" | grub2-setpassword
+     - password=$(openssl rand -base64 12); echo -e "$password\n$password" | grub2-mkpasswd-pbkdf2
+     - password=$(openssl rand -base64 12); echo -e "$password\n$password" | grub2-mkpasswd-pbkdf2 | tail -n1
+     - hash=$(openssl rand -base64 12 | grub2-mkpasswd-pbkdf2 | awk '{print $NF}'); echo $hash
+     - grub2-setpassword --help
+     - test -d /sys/firmware/efi && echo EFI || echo BIOS
+     - password=$(openssl rand -base64 12); hash=$(printf "%s\n%s\n" "$password" "$password" | grub2-mkpasswd-pbkdf2 | awk '/PBKDF2/ {print $NF}'); echo "$hash"
+     - hash=$(password=$(openssl rand -base64 12); printf "%s\n%s\n" "$password" "$password" | grub2-mkpasswd-pbkdf2 | awk '/PBKDF2/ {print $NF}'); sed -i "s/^GRUB2_PASSWORD=.*/GRUB2_PASSWORD=\"$hash\"/" /boot/grub2/user.cfg
+   Review: approve=True, optimal=True, score=9
+   QA: safe=True, recommendation=Approve
+   Final: failed  |  Duration: 414.8s
+--------------------------------------------------------------------------------
+
+9. [OK] network_configure_name_resolution - Configure Multiple DNS Servers in /etc/resolv.conf
+   Severity: 2  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #2, scan_passed=True, cmds=0, duration=453.2s
+   Review: approve=True, optimal=False, score=8
+   Feedback: The plan functionally resolves the vulnerability by ensuring /etc/resolv.conf is empty or contains the required DNS entries based on /etc/nsswitch.conf configuration. It addresses both scenarios outlined in the finding description.
+   QA: safe=True, recommendation=Approve
+   Final: success  |  Duration: 453.4s
+--------------------------------------------------------------------------------
+
+10. [REVIEW] sysctl_user_max_user_namespaces_no_remediation - Disable the use of user namespaces
+   Severity: 2  |  Host: localhost
+   Triage: risk=medium, remediate=False
+   Final: requires_human_review  |  Duration: 5.1s
+--------------------------------------------------------------------------------
+
+11. [OK] postfix_prevent_unrestricted_relay - Prevent Unrestricted Mail Relaying
+   Severity: 2  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #1, scan_passed=True, cmds=2, duration=66.7s
+     - postconf -e 'smtpd_client_restrictions = permit_mynetworks,reject'
+     - systemctl restart postfix
+   Review: approve=True, optimal=False, score=8
+   Feedback: The plan effectively implements a configuration change to restrict mail relaying, but it could be improved in terms of validation and documentation.
+   QA: safe=True, recommendation=Approve
+   Final: success  |  Duration: 73.0s
+--------------------------------------------------------------------------------
+
+12. [FAIL] chronyd_server_directive - Ensure Chrony is only configured with the server directive
+   Severity: 2  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #3, scan_passed=False, cmds=5, duration=173.8s
+     - sed -i -e '/^[[:space:]]*#?[[:space:]]*pool[[:space:]]/d' /etc/chrony.conf
+     - sed -i -e '/^[[:space:]]*#?[[:space:]]*peer[[:space:]]/d' /etc/chrony.conf
+     - systemctl reload chronyd
+     - sed -i -E '/^[[:space:]]*(#?[[:space:]]*)?(pool|peer)[[:space:]]/d' /etc/chrony.conf
+     - kill -HUP $(pidof chronyd)
+   Review: approve=True, optimal=False, score=7
+   Feedback: The proposed plan effectively targets commented-out or leading whitespace variations of the 'pool' and 'peer' directives using `sed` with extended regex, accurately editing lines in /etc/chrony.conf to prevent any non-server sources for Chrony from being readable by the scanner. The addressing of previously mentioned concerns is achieved via these regex patterns. Reverting changes might inadvertently leave directives commented, but existing system review processes followed as suggested ensure accuracy usability, thereby aligning with feedback for mention.
+   QA: safe=True, recommendation=Approve
+   Final: failed  |  Duration: 173.9s
+--------------------------------------------------------------------------------
+
+13. [OK] sssd_enable_certmap - Enable Certmap in SSSD
+   Severity: 2  |  Host: localhost
+   Triage: risk=low, remediate=True
+   Remedy: attempt #1, scan_passed=True, cmds=6, duration=216.6s
+     - systemctl restart sssd
+     - systemctl status sssd --no-pager
+     - systemctl restart sssd
+     - systemctl status sssd --no-pager
+     - systemctl restart sssd
+     - systemctl status sssd --no-pager
+   Review: approve=True, optimal=False, score=8
+   Feedback: The plan proposes a structured approach to enable certmap in SSSD and addresses the vulnerability. However, there are areas for improvement to ensure robustness and clarity.
+   QA: safe=True, recommendation=Approve
+   Final: success  |  Duration: 220.3s
+--------------------------------------------------------------------------------

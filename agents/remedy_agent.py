@@ -2,7 +2,7 @@
 #
 # Purpose: Execute remediation using LLM with tool-calling interface
 # Position in pipeline: SECOND stage (after Triage approval)
-# Tools: run_cmd, write_file, read_file, scan (exactly 4 per spec)
+# Tools: run_cmd, write_file, read_file (exactly 3 — scan is run automatically post-session)
 # Has self-loop: Retries on scan failure with feedback
 #
 # Input: RemedyInput (vulnerability, triage_decision, attempt_number, previous_attempts, review_feedback)
@@ -13,7 +13,7 @@
 # 2. LLM generates remediation commands via tool calling
 # 3. Execute commands via run_cmd tool (uses ShellCommandExecutor)
 # 4. Write/read files as needed
-# 5. Call scan tool to verify fix
+# 5. Authoritative scan runs automatically after session to verify fix
 # 6. Self-loop up to max attempts if scan fails
 # 7. Track all execution details
 #
@@ -36,7 +36,7 @@
 #             {"type": "function", "function": {"name": "run_cmd", ...}},
 #             {"type": "function", "function": {"name": "write_file", ...}},
 #             {"type": "function", "function": {"name": "read_file", ...}},
-#             {"type": "function", "function": {"name": "scan", ...}}
+#             (scan runs automatically post-session — not exposed as a tool)
 #         ]
 #
 #     def process(self, input_data: RemedyInput) -> RemediationAttempt:
@@ -44,3 +44,722 @@
 #         # Run LLM session with tools
 #         # Parse results
 #         # Return RemediationAttempt
+
+# agents/remedy_agent.py
+import json
+import os
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import requests
+
+from schemas import Vulnerability, RemedyInput, RemediationAttempt, FindingResult, ReviewVerdict, ToolVerdict, RunCommandResult
+from helpers.command_executor import ShellCommandExecutor
+from helpers.utils import normalize_command
+
+DEFAULT_OPENROUTER_BASE = "https://openrouter.ai/api/v1"
+DEFAULT_REMEDY_MODEL = os.getenv("REMEDY_AGENT_MODEL") or os.getenv("OPENROUTER_MODEL")  # fallback
+
+def _get_config():
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        raise ValueError("OPENROUTER_API_KEY is required.")
+    base_url = (os.getenv("OPENROUTER_BASE_URL") or DEFAULT_OPENROUTER_BASE).rstrip("/")
+    model = os.getenv("REMEDY_AGENT_MODEL") or os.getenv("OPENROUTER_MODEL")
+    if not model:
+        raise ValueError("REMEDY_AGENT_MODEL or OPENROUTER_MODEL is required.")
+    return api_key, base_url, model
+
+
+class RemedyAgent:
+    """
+    Remedy Agent (Stage 2)
+    Tools (exactly 3): run_cmd, read_file, write_file (scan runs automatically post-session)
+    Self-loop behavior is typically orchestrated by workflow, but this class can support max attempts too.
+    """
+
+    def __init__(
+        self,
+        *,
+        executor: ShellCommandExecutor,
+        scanner: Any,  # OpenSCAPScanner-like wrapper that can verify one vuln
+        work_dir: Path,
+        max_tool_iterations: int = 15,
+        request_timeout: int = 120,
+        metrics_tracker=None,
+        transcript_dir: Optional[str | Path] = None,
+    ):
+        self.executor = executor
+        self.scanner = scanner
+        self.work_dir = Path(work_dir)
+        self.work_dir.mkdir(parents=True, exist_ok=True)
+
+        api_key, base_url, model = _get_config()
+        self.api_key = api_key
+        self.base_url = base_url
+        self.model_name = model
+        self.endpoint = f"{self.base_url}/chat/completions"
+
+        self.headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {self.api_key}",
+        }
+
+        self.max_tool_iterations = max_tool_iterations
+        self.request_timeout = request_timeout
+        self.metrics_tracker = metrics_tracker
+
+    # -------------------------
+    # Public API
+    # -------------------------
+
+    def process(self, input_data: RemedyInput) -> RemediationAttempt:
+        vuln = input_data.vulnerability
+        start = time.time()
+
+        attempt = RemediationAttempt(
+            finding_id=vuln.id,
+            attempt_number=input_data.attempt_number,
+            commands_executed=[],
+            files_modified=[],
+            files_read=[],
+            execution_details=[],
+            scan_passed=False,
+            scan_output=None,
+            attempt_duration=0.0,
+            success=False,
+            error_summary=None,
+            llm_verdict=None,
+        )
+
+        user_prompt = self._build_agent_prompt(
+            vuln=vuln,
+            triage_reason=input_data.triage_decision.reason,
+            previous_attempts=input_data.previous_attempts,
+            review_feedback=input_data.review_feedback,
+            previous_review_verdicts=input_data.previous_review_verdicts,
+            attempt_number=input_data.attempt_number,
+            plan_text=input_data.plan_text,
+        )
+
+        session_label = f"{vuln.id}_attempt{input_data.attempt_number}"
+        (self.work_dir / f"remedy_prompt_{session_label}.txt").write_text(user_prompt, encoding="utf-8")
+
+        with self.executor.hold_files():
+            session_result = self._run_tool_session(user_prompt=user_prompt, session_label=session_label, vuln=vuln)
+
+        # Pull tool traces into attempt
+        attempt.commands_executed = session_result["commands_executed"]
+        attempt.files_modified = session_result["files_modified"]
+        attempt.files_read = session_result["files_read"]
+        attempt.execution_details = session_result["execution_details"]
+        attempt.llm_verdict = ToolVerdict(message=session_result.get("final_message", ""), resolved=False)
+        attempt.llm_metrics = session_result.get("llm_metrics")
+
+        # Scan is NOT run here — batch-then-verify handles scanning
+        # after all findings in a round are remediated.
+        attempt.scan_passed = False
+        attempt.scan_output = None
+        attempt.success = False
+
+        attempt.attempt_duration = time.time() - start
+
+        # Save transcript/log
+        usage_records = session_result.get("usage", [])
+        total_api_seconds = round(sum(u.get("_api_call_seconds", 0) for u in usage_records), 3)
+        usage_total = {}
+        if usage_records:
+            usage_total = {
+                "prompt_tokens": sum(u.get("prompt_tokens", 0) for u in usage_records),
+                "completion_tokens": sum(u.get("completion_tokens", 0) for u in usage_records),
+                "total_tokens": sum(u.get("total_tokens", 0) for u in usage_records),
+                "total_api_seconds": total_api_seconds,
+                "per_turn": usage_records,
+            }
+        (self.work_dir / f"remedy_transcript_{session_label}.json").write_text(
+            json.dumps({"messages": session_result["transcript"], "usage": usage_total or None}, indent=2, default=str), encoding="utf-8"
+        )
+
+        return attempt
+
+    def plan_fix(self, input_data: RemedyInput) -> str:
+        """Ask the LLM to describe its proposed fix without executing anything.
+
+        Returns a text description of the planned remediation (no tools called).
+        Used by RemedyAgentV2 to consult Review+QA before applying.
+        """
+        base_prompt = self._build_agent_prompt(
+            vuln=input_data.vulnerability,
+            triage_reason=input_data.triage_decision.reason,
+            previous_attempts=input_data.previous_attempts,
+            review_feedback=input_data.review_feedback,
+            previous_review_verdicts=input_data.previous_review_verdicts,
+            attempt_number=input_data.attempt_number,
+        )
+
+        planning_preamble = (
+            "DO NOT execute anything. Only DESCRIBE your proposed fix.\n"
+            "Describe:\n"
+            "1. What config files you would modify\n"
+            "2. What commands you would run\n"
+            "3. Why this approach is correct\n"
+            "4. Any risks or side effects\n\n"
+        )
+
+        prompt = planning_preamble + base_prompt
+
+        payload = {
+            "model": self.model_name,
+            "messages": [
+                {"role": "system", "content": "You are a Linux security remediation planner. Describe your proposed fix clearly and concisely."},
+                {"role": "user", "content": prompt},
+            ],
+        }
+        resp = requests.post(self.endpoint, headers=self.headers, json=payload, timeout=self.request_timeout)
+        if resp.status_code >= 400:
+            raise RuntimeError(f"LLM API error {resp.status_code}: {resp.text}")
+        data = resp.json()
+        return (data.get("choices", [{}])[0].get("message", {}).get("content") or "").strip()
+
+    # -------------------------
+    # Prompt + tool definitions
+    # -------------------------
+
+    def _build_agent_prompt(
+        self,
+        *,
+        vuln: Vulnerability,
+        triage_reason: str,
+        previous_attempts: List[RemediationAttempt],
+        review_feedback: Optional[str],
+        previous_review_verdicts: Optional[List[ReviewVerdict]] = None,
+        attempt_number: int = 1,
+        plan_text: Optional[str] = None,
+    ) -> str:
+        rule_id = vuln.oval_id or vuln.rule or vuln.title
+        rule_name = rule_id.replace("xccdf_org.ssgproject.content_rule_", "")
+        description = (vuln.description or "").strip()
+        recommendation = (vuln.recommendation or "").strip()
+
+        lines = [
+            "You are the Remedy agent remediating ONE OpenSCAP finding on Rocky Linux 10.",
+            "You MUST use ONLY the provided tools: run_cmd, read_file, write_file.",
+            "Rules:",
+            "- Use run_cmd for EXACTLY ONE shell command at a time. Do NOT chain with && ; or multiline scripts.",
+            "- Commands run as root. Do not prefix with sudo.",
+            "- ALWAYS use read_file to inspect the target config file BEFORE modifying it.",
+            "- Do NOT append duplicate lines. Use sed -i to modify existing values in-place.",
+            "- If a line is commented (e.g. '# minlen = 8'), uncomment it and set the value.",
+            "- Prefer minimal, reversible changes. A verification scan runs automatically after your session.",
+            "",
+            "FINDING:",
+            f"- Title: {vuln.title}",
+            f"- Rule Name: {rule_name}",
+            f"- Rule ID: {rule_id}",
+            f"- Finding ID: {vuln.id}",
+            f"- Severity: {vuln.severity}",
+            f"- Host: {vuln.host}",
+            "",
+            "TRIAGE CONTEXT:",
+            f"- Approved for remediation because: {triage_reason}",
+        ]
+
+        if description:
+            lines.append(f"- Description: {description[:600]}")
+        if recommendation:
+            lines.append(f"- Recommendation: {recommendation[:600]}")
+
+        if plan_text:
+            lines.extend([
+                "",
+                "APPROVED FIX PLAN (follow this plan):",
+                plan_text.strip()[:1200],
+            ])
+
+        if review_feedback:
+            lines.extend(["", "REVIEW FEEDBACK (apply improvements):", review_feedback.strip()[:900]])
+
+        if previous_review_verdicts:
+            lines.extend(["", "STRUCTURED REVIEW HISTORY (address these specific issues):"])
+            for i, rv in enumerate(previous_review_verdicts[-3:], 1):
+                lines.append(f"  Review #{i}: approve={rv.approve}, score={rv.security_score}")
+                if rv.concerns:
+                    lines.append(f"    Concerns: {'; '.join(rv.concerns[:5])}")
+                if rv.suggested_improvements:
+                    lines.append(f"    Required improvements: {'; '.join(rv.suggested_improvements[:5])}")
+                if rv.feedback:
+                    lines.append(f"    Feedback: {rv.feedback[:200]}")
+
+        if previous_attempts:
+            lines.append("")
+            lines.append(f"PREVIOUS ATTEMPTS ({len(previous_attempts)}):")
+            for att in previous_attempts[-3:]:
+                lines.append(f"* Attempt {att.attempt_number}: success={att.success} scan_passed={att.scan_passed}")
+                if att.commands_executed:
+                    lines.append("  Commands:")
+                    for cmd in att.commands_executed[-4:]:
+                        lines.append(f"    - {cmd}")
+                if att.error_summary:
+                    lines.append(f"  Error: {att.error_summary[:300]}")
+                if att.scan_output:
+                    lines.append(f"  Scan output: {str(att.scan_output)[:900]}")
+
+        if previous_attempts and attempt_number >= 2:
+            all_prior_cmds: List[str] = []
+            for att in previous_attempts:
+                all_prior_cmds.extend(att.commands_executed[-4:])
+            if all_prior_cmds:
+                lines.extend([
+                    "",
+                    f"STRATEGY CHANGE REQUIRED (attempt {attempt_number}):",
+                    "You MUST use a DIFFERENT approach from all prior attempts.",
+                    "Do NOT repeat any of these previously-tried commands:",
+                ])
+                for cmd in all_prior_cmds[-8:]:
+                    lines.append(f"  AVOID: {cmd}")
+                lines.append("If direct config-file edits failed, try: authselect, sysctl, systemctl, or package reinstall.")
+
+        lines.extend([
+            "",
+            "Return tool calls as needed. A verification scan runs automatically after your session.",
+        ])
+        return "\n".join(lines)
+
+    def _tools_spec(self) -> List[Dict[str, Any]]:
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": "run_cmd",
+                    "description": "Execute a single shell command as root on the target. Do not chain commands.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"command": {"type": "string"}},
+                        "required": ["command"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read a single file from the target host.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"path": {"type": "string"}},
+                        "required": ["path"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_file",
+                    "description": "Write content to a single file on the target host.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {"type": "string"},
+                            "content": {"type": "string"},
+                            "mode": {"type": "string"},
+                        },
+                        "required": ["path", "content"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        ]
+
+    # -------------------------
+    # Context management
+    # -------------------------
+
+    _MAX_TOOL_OUTPUT_CHARS = 1500
+
+    def _truncate_tool_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        """Truncate large fields in tool results to keep context within budget."""
+        limit = self._MAX_TOOL_OUTPUT_CHARS
+        for key in ("stdout", "stderr", "content"):
+            val = payload.get(key)
+            if isinstance(val, str) and len(val) > limit:
+                payload[key] = val[:limit] + f"\n... [truncated, {len(val)} chars total]"
+        # Drop fields the LLM doesn't need for reasoning
+        for key in ("duration", "normalized_from", "truncated_stdout", "truncated_stderr"):
+            payload.pop(key, None)
+        return payload
+
+    # -------------------------
+    # Tool-calling loop
+    # -------------------------
+
+    def _run_tool_session(self, *, user_prompt: str, session_label: str, vuln: Vulnerability) -> Dict[str, Any]:
+        system_prompt = (
+            "You are an adaptive remediation agent on Rocky Linux / RHEL. "
+            "Use tools to inspect and remediate the finding.\n"
+            "STRATEGY:\n"
+            "1. ALWAYS read the relevant config file FIRST with read_file before making changes.\n"
+            "2. Identify the exact key/value that needs changing.\n"
+            "3. Use write_file for config changes (avoids shell quoting issues) or run_cmd for sed/systemctl.\n"
+            "4. Verify with run_cmd (e.g. grep) that the change took effect.\n"
+            "5. Once the fix is applied, stop — a verification scan runs automatically.\n"
+            "RULES:\n"
+            "- One command at a time. Do NOT chain with && or ;\n"
+            "- This is Rocky Linux/RHEL. Use dnf (not apt). Use systemctl (not service).\n"
+            "- Do NOT duplicate config lines. If a key already exists, modify it in-place with sed.\n"
+            "- If a key is commented out (# minlen = 8), uncomment and set the correct value.\n"
+            "- stderr may contain SSH banners — ignore them. Check exit_code and stdout for results.\n"
+            "- CRITICAL: Do NOT modify SSH config, sshd_config, firewall rules, or SELinux in ways that could block SSH access. Do not disable or mask sshd. The pipeline requires SSH to operate."
+        )
+
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        transcript: List[Dict[str, Any]] = list(messages)
+
+        commands_executed: List[str] = []
+        files_read: List[str] = []
+        files_modified: List[str] = []
+        execution_details: List[RunCommandResult] = []
+        final_message: str = ""
+        usage_records: List[Dict[str, Any]] = []
+        turn_records: List[Dict[str, Any]] = []
+
+        tool_calls_used = 0
+        total_turns = 0  # Counts ALL LLM round-trips (tool + reasoning)
+
+        while tool_calls_used < self.max_tool_iterations and total_turns < self.max_tool_iterations + 6:
+            total_turns += 1
+            _t0 = time.time()
+            resp = self._chat(messages)
+            _turn_duration = time.time() - _t0
+            turn_usage = resp.get("usage")
+            if turn_usage:
+                turn_usage["_api_call_seconds"] = round(_turn_duration, 3)
+                usage_records.append(turn_usage)
+            else:
+                usage_records.append({"_api_call_seconds": round(_turn_duration, 3)})
+            msg = resp["choices"][0]["message"]
+
+            assistant_entry = {
+                "role": "assistant",
+                "content": msg.get("content"),
+                "tool_calls": msg.get("tool_calls"),
+            }
+            # Capture reasoning/thinking tokens if present
+            reasoning = (
+                msg.get("reasoning_content")
+                or msg.get("reasoning")
+                or msg.get("thinking")
+            )
+            if reasoning:
+                assistant_entry["reasoning"] = reasoning
+            # Store the full raw message object for auditing
+            assistant_entry["_raw_message"] = dict(msg)
+
+            transcript.append(assistant_entry)
+            messages.append(msg)
+
+            tool_calls = msg.get("tool_calls") or []
+            if not tool_calls:
+                # Assistant is reasoning; allow a few turns then stop
+                final_message = msg.get("content") or final_message
+                if total_turns > tool_calls_used + 4:
+                    break
+                continue
+
+            for tc in tool_calls:
+                name = tc["function"]["name"]
+                raw_args = tc["function"].get("arguments")
+
+                # Normalize tool arguments (models may return str, dict, or list)
+                if isinstance(raw_args, str):
+                    try:
+                        args = json.loads(raw_args)
+                    except Exception:
+                        args = {}
+                elif isinstance(raw_args, dict):
+                    args = raw_args
+                elif isinstance(raw_args, list):
+                    args = raw_args[0] if raw_args and isinstance(raw_args[0], dict) else {}
+                else:
+                    args = {}
+
+                # Ensure args is always a dict (json.loads may return a list)
+                if not isinstance(args, dict):
+                    if isinstance(args, list) and args and isinstance(args[0], dict):
+                        args = args[0]
+                    else:
+                        args = {}
+
+                if name == "run_cmd":
+                    command = (args.get("command") or "").strip()
+                    result = self._tool_run_cmd(command)
+                    commands_executed.append(result.command)
+                    execution_details.append(result)
+                    payload = self._truncate_tool_payload(result.model_dump())
+                    cmd_label = command
+
+                elif name == "read_file":
+                    path = (args.get("path") or "").strip()
+                    result = self.executor.read_file(path)
+                    files_read.append(path)
+                    execution_details.append(result)
+                    payload = self._truncate_tool_payload(result.model_dump())
+                    cmd_label = path
+
+                elif name == "write_file":
+                    path = (args.get("path") or "").strip()
+                    content = args.get("content") or ""
+                    mode = args.get("mode")
+                    result = self.executor.write_file(path, content, mode=mode)
+                    files_modified.append(path)
+                    execution_details.append(result)
+                    payload = self._truncate_tool_payload(result.model_dump())
+                    cmd_label = path
+
+                else:
+                    payload = {"error": f"Unknown tool {name}"}
+                    cmd_label = ""
+
+                # Record per-turn timing metrics
+                api_s = round(_turn_duration, 3)
+                cmd_s = round(result.duration, 3) if hasattr(result, "duration") else 0.0
+                turn_records.append({
+                    "turn": total_turns,
+                    "api_seconds": api_s,
+                    "cmd_seconds": cmd_s,
+                    "total": round(api_s + cmd_s, 3),
+                    "tool": name,
+                    "command": cmd_label,
+                })
+
+                tool_entry = {
+                    "role": "tool",
+                    "tool_call_id": tc["id"],
+                    "content": json.dumps(payload),
+                }
+                transcript.append(tool_entry)
+                messages.append(tool_entry)
+
+                tool_calls_used += 1
+                if tool_calls_used >= self.max_tool_iterations:
+                    break
+
+            if tool_calls_used >= self.max_tool_iterations:
+                break
+
+        return {
+            "transcript": transcript,
+            "commands_executed": commands_executed,
+            "files_read": files_read,
+            "files_modified": files_modified,
+            "execution_details": execution_details,
+            "final_message": final_message,
+            "usage": usage_records,
+            "llm_metrics": {
+                "total_llm_api_seconds": round(sum(r["api_seconds"] for r in turn_records), 3),
+                "total_command_execution_seconds": round(sum(r["cmd_seconds"] for r in turn_records), 3),
+                "llm_calls": len(usage_records),
+                "per_turn": turn_records,
+            },
+        }
+
+    def _chat(self, messages: List[Dict[str, Any]], _retries: int = 3, *, tools: Optional[List[Dict[str, Any]]] = None) -> Dict[str, Any]:
+        payload = {
+            "model": self.model_name,
+            "messages": messages,
+            "tools": tools if tools is not None else self._tools_spec(),
+            "tool_choice": "auto",
+        }
+        last_exc: Optional[Exception] = None
+        for attempt in range(_retries):
+            start_time = None
+            if self.metrics_tracker is not None:
+                start_time = self.metrics_tracker.start_call()
+            try:
+                r = requests.post(self.endpoint, headers=self.headers, json=payload, timeout=self.request_timeout)
+                if r.status_code >= 500:
+                    last_exc = RuntimeError(f"LLM API error {r.status_code}: {r.text}")
+                    if self.metrics_tracker is not None:
+                        self.metrics_tracker.record_call(None, agent="remedy", model=self.model_name, start_time=start_time, error=True, error_message=str(last_exc))
+                    time.sleep(2 ** attempt)
+                    continue
+                if r.status_code >= 400:
+                    if self.metrics_tracker is not None:
+                        self.metrics_tracker.record_call(None, agent="remedy", model=self.model_name, start_time=start_time, error=True, error_message=f"HTTP {r.status_code}")
+                    raise RuntimeError(f"LLM API error {r.status_code}: {r.text}")
+                data = r.json()
+                if self.metrics_tracker is not None:
+                    self.metrics_tracker.record_call(data, agent="remedy", model=self.model_name, start_time=start_time)
+                return data
+            except requests.exceptions.Timeout as exc:
+                last_exc = exc
+                if self.metrics_tracker is not None and start_time is not None:
+                    self.metrics_tracker.record_call(None, agent="remedy", model=self.model_name, start_time=start_time, error=True, error_message=str(exc))
+                time.sleep(2 ** attempt)
+            except requests.exceptions.ConnectionError as exc:
+                last_exc = exc
+                if self.metrics_tracker is not None and start_time is not None:
+                    self.metrics_tracker.record_call(None, agent="remedy", model=self.model_name, start_time=start_time, error=True, error_message=str(exc))
+                time.sleep(2 ** attempt)
+        raise RuntimeError(f"LLM API failed after {_retries} retries: {last_exc}")
+
+    # -------------------------
+    # Tool implementations
+    # -------------------------
+
+    def _tool_run_cmd(self, command: str) -> RunCommandResult:
+        command = normalize_command(command)
+        return self.executor.run_command(command)
+
+    def _tool_scan(self, vuln: Vulnerability) -> Dict[str, Any]:
+        """
+        Use single-rule scan for fast verification (~10-30s instead of ~5-10min).
+        Falls back to full scan if single-rule is unavailable.
+        """
+        is_fixed, output = self.scanner.scan_single_rule(vuln)
+        return {
+            "pass": bool(is_fixed),
+            "summary": output,
+            "raw": None,
+        }
+
+    # ------------------------------------------------------------------
+    # Output: PDF report
+    # ------------------------------------------------------------------
+    def write_results_pdf(
+        self,
+        results: List[FindingResult],
+        output_path: str | Path = "reports/remedy_report.pdf",
+        *,
+        target_host: str = "unknown",
+        title: str = "Remedy Agent Report",
+    ) -> Path:
+        """
+        Generate a PDF report summarising all Remedy Agent outputs.
+
+        Only includes findings that reached the Remedy stage (have a
+        RemediationAttempt).
+        """
+        from reportlab.lib import colors
+        from reportlab.lib.pagesizes import letter, landscape
+        from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+        from reportlab.lib.units import inch
+        from reportlab.platypus import (
+            Paragraph,
+            SimpleDocTemplate,
+            Spacer,
+            Table,
+            TableStyle,
+        )
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        page_size = landscape(letter)
+        doc = SimpleDocTemplate(
+            str(out),
+            pagesize=page_size,
+            topMargin=0.5 * inch,
+            bottomMargin=0.5 * inch,
+            leftMargin=0.5 * inch,
+            rightMargin=0.5 * inch,
+        )
+
+        styles = getSampleStyleSheet()
+        elements: list = []
+
+        title_style = ParagraphStyle("RTitle", parent=styles["Title"], fontSize=20, spaceAfter=6)
+        subtitle_style = ParagraphStyle("RSub", parent=styles["Normal"], fontSize=10, textColor=colors.grey, spaceAfter=14)
+        section_style = ParagraphStyle("RSec", parent=styles["Heading2"], fontSize=14, spaceBefore=18, spaceAfter=8, textColor=colors.HexColor("#1a1a2e"))
+        cell_style = ParagraphStyle("RCell", parent=styles["Normal"], fontSize=8, leading=10)
+        body_style = ParagraphStyle("RBody", parent=styles["Normal"], fontSize=9, leading=12)
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        elements.append(Paragraph(title, title_style))
+        elements.append(Paragraph(f"Target: {target_host} &nbsp;|&nbsp; Generated: {now}", subtitle_style))
+
+        # Filter to findings that have a remediation attempt
+        remedied = [r for r in results if r.remediation is not None]
+
+        passed = sum(1 for r in remedied if r.remediation and r.remediation.scan_passed)
+        failed = len(remedied) - passed
+        avg_attempts = (
+            round(sum(r.remediation.attempt_number for r in remedied if r.remediation) / len(remedied), 2)
+            if remedied else 0.0
+        )
+
+        elements.append(Paragraph("Remedy Summary", section_style))
+        summary_data = [
+            ["Total Remediation Attempts", str(len(remedied))],
+            ["Scan Passed", str(passed)],
+            ["Scan Failed", str(failed)],
+            ["Avg Attempt #", str(avg_attempts)],
+        ]
+        summary_table = Table(summary_data, colWidths=[3 * inch, 1.5 * inch])
+        summary_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#e3f2fd")),
+            ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+            ("FONTSIZE", (0, 0), (-1, -1), 10),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.lightgrey),
+        ]))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 14))
+
+        if not remedied:
+            elements.append(Paragraph("No findings reached the Remedy stage.", body_style))
+        else:
+            elements.append(Paragraph("Per-Finding Remedy Details", section_style))
+            table_data = [
+                [
+                    Paragraph("<b>ID</b>", cell_style),
+                    Paragraph("<b>Title</b>", cell_style),
+                    Paragraph("<b>Attempt</b>", cell_style),
+                    Paragraph("<b>Scan</b>", cell_style),
+                    Paragraph("<b>Duration</b>", cell_style),
+                    Paragraph("<b>Commands</b>", cell_style),
+                    Paragraph("<b>Files Modified</b>", cell_style),
+                    Paragraph("<b>Error</b>", cell_style),
+                ],
+            ]
+            for r in remedied:
+                rm = r.remediation
+                assert rm is not None
+                scan_text = '<font color="#27ae60">PASS</font>' if rm.scan_passed else '<font color="#e74c3c">FAIL</font>'
+                cmds_text = "<br/>".join(rm.commands_executed) or "\u2014"
+                files_text = "<br/>".join(rm.files_modified) or "\u2014"
+                table_data.append([
+                    Paragraph(r.vulnerability.id, cell_style),
+                    Paragraph(r.vulnerability.title or "\u2014", cell_style),
+                    Paragraph(str(rm.attempt_number), cell_style),
+                    Paragraph(scan_text, cell_style),
+                    Paragraph(f"{rm.attempt_duration:.1f}s", cell_style),
+                    Paragraph(cmds_text, cell_style),
+                    Paragraph(files_text, cell_style),
+                    Paragraph(rm.error_summary or "\u2014", cell_style),
+                ])
+
+            col_widths = [0.7 * inch, 1.4 * inch, 0.5 * inch, 0.5 * inch, 0.55 * inch, 3.0 * inch, 1.5 * inch, 1.85 * inch]
+            t = Table(table_data, colWidths=col_widths, repeatRows=1)
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1a1a2e")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#fafafa")]),
+                ("GRID", (0, 0), (-1, -1), 0.4, colors.lightgrey),
+                ("FONTNAME", (0, 0), (-1, -1), "Helvetica"),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("TOPPADDING", (0, 0), (-1, -1), 4),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ]))
+            elements.append(t)
+
+        doc.build(elements)
+        return out
+
